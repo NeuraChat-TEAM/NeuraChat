@@ -1,0 +1,16 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "neura",
+  "outputfilename": "Neura",
+  "frontend:install": "bun install",
+  "frontend:build": "bun x vite build",
+  "frontend:dev:watcher": "bun x vite dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "Neura"
+  },
+  "info": {
+    "productName": "Neura",
+    "productVersion": "0.1.0"
+  }
+}

@@ -1,0 +1,395 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/* ------------------------------------------------------------------ tokens
+   Notion's own palette, mapped onto shadcn's semantic variable names so the
+   standard shadcn component classes render in Notion colours.               */
+
+:root {
+	--radius: 0.625rem;
+
+	/* Notion light */
+	--background: #ffffff;
+	--foreground: #1f1f1f;
+	--card: #ffffff;
+	--card-foreground: #1f1f1f;
+	--popover: #ffffff;
+	--popover-foreground: #1f1f1f;
+	--primary: #1f1f1f;
+	--primary-foreground: #ffffff;
+	--secondary: #f7f7f5;
+	--secondary-foreground: #1f1f1f;
+	--muted: #f7f7f5;
+	--muted-foreground: #73726e;
+	--accent: #f1f1ef;
+	--accent-foreground: #1f1f1f;
+	--destructive: #d44c47;
+	--destructive-foreground: #ffffff;
+	--border: #e9e9e7;
+	--input: #e9e9e7;
+	--ring: #2383e2;
+	--sidebar: #f7f7f5;
+	--sidebar-foreground: #1f1f1f;
+	--sidebar-accent: #eeeeec;
+	--sidebar-border: #e9e9e7;
+	--blue-accent: #2383e2;
+	--code-foreground: #eb5757;
+	--shadow-sheet: 0 0 0 1px rgb(15 15 15 / 5%), 0 3px 6px rgb(15 15 15 / 10%),
+		0 9px 24px rgb(15 15 15 / 20%);
+}
+
+.dark {
+	/* Notion dark */
+	--background: #202020;
+	--foreground: #eeeeec;
+	--card: #252525;
+	--card-foreground: #eeeeec;
+	--popover: #2b2b2b;
+	--popover-foreground: #eeeeec;
+	--primary: #eeeeec;
+	--primary-foreground: #202020;
+	--secondary: #2b2b2b;
+	--secondary-foreground: #eeeeec;
+	--muted: #2b2b2b;
+	--muted-foreground: #9b9b9b;
+	--accent: #313131;
+	--accent-foreground: #eeeeec;
+	--destructive: #ff7369;
+	--destructive-foreground: #1f1f1f;
+	--border: #2f2f2f;
+	--input: #373737;
+	--ring: #2383e2;
+	--sidebar: #191919;
+	--sidebar-foreground: #d4d4d4;
+	--sidebar-accent: #2b2b2b;
+	--sidebar-border: #2f2f2f;
+	--blue-accent: #2383e2;
+	--code-foreground: #ff7369;
+	--shadow-sheet: 0 0 0 1px rgb(0 0 0 / 40%), 0 3px 6px rgb(0 0 0 / 30%),
+		0 9px 24px rgb(0 0 0 / 40%);
+}
+
+@theme inline {
+	--color-background: var(--background);
+	--color-foreground: var(--foreground);
+	--color-card: var(--card);
+	--color-card-foreground: var(--card-foreground);
+	--color-popover: var(--popover);
+	--color-popover-foreground: var(--popover-foreground);
+	--color-primary: var(--primary);
+	--color-primary-foreground: var(--primary-foreground);
+	--color-secondary: var(--secondary);
+	--color-secondary-foreground: var(--secondary-foreground);
+	--color-muted: var(--muted);
+	--color-muted-foreground: var(--muted-foreground);
+	--color-accent: var(--accent);
+	--color-accent-foreground: var(--accent-foreground);
+	--color-destructive: var(--destructive);
+	--color-destructive-foreground: var(--destructive-foreground);
+	--color-border: var(--border);
+	--color-input: var(--input);
+	--color-ring: var(--ring);
+	--color-sidebar: var(--sidebar);
+	--color-sidebar-foreground: var(--sidebar-foreground);
+	--color-sidebar-accent: var(--sidebar-accent);
+	--color-sidebar-border: var(--sidebar-border);
+	--color-brand: var(--blue-accent);
+	--color-code: var(--code-foreground);
+	--radius-sm: calc(var(--radius) - 4px);
+	--radius-md: calc(var(--radius) - 2px);
+	--radius-lg: var(--radius);
+	--radius-xl: calc(var(--radius) + 4px);
+	--font-sans: ui-sans-serif, -apple-system, "Segoe UI", Inter, system-ui, sans-serif;
+	--font-mono: "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+	--shadow-sheet: var(--shadow-sheet);
+}
+
+@layer base {
+	* {
+		@apply border-border outline-ring/40;
+	}
+	html,
+	body,
+	#root {
+		height: 100%;
+	}
+	body {
+		@apply bg-background text-foreground font-sans antialiased;
+		overflow: hidden;
+	}
+	/* Motion kill switch from Settings → Вид */
+	[data-motion="off"] *,
+	[data-motion="off"] *::before,
+	[data-motion="off"] *::after {
+		animation-duration: 0s !important;
+		transition-duration: 0s !important;
+	}
+	::-webkit-scrollbar {
+		width: 10px;
+		height: 10px;
+	}
+	::-webkit-scrollbar-thumb {
+		background: color-mix(in srgb, var(--muted-foreground) 35%, transparent);
+		border-radius: 8px;
+		border: 3px solid transparent;
+		background-clip: content-box;
+	}
+	::-webkit-scrollbar-track {
+		background: transparent;
+	}
+}
+
+@layer components {
+	/* Notion's "Working" shimmer used in the assistant step header. */
+	.shimmer {
+		background: linear-gradient(
+				90deg,
+				var(--muted-foreground) 0%,
+				var(--foreground) 50%,
+				var(--muted-foreground) 100%
+			)
+			0 0 / 200% 100%;
+		-webkit-background-clip: text;
+		background-clip: text;
+		color: transparent;
+		animation: shimmer 1.6s linear infinite;
+	}
+	@keyframes shimmer {
+		to {
+			background-position: -200% 0;
+		}
+	}
+
+	/* Плавное проявление ответа: текст всплывает с лёгким blur и затемнением снизу. */
+	.answer-reveal {
+		animation: answer-in 520ms cubic-bezier(0.16, 1, 0.3, 1) both;
+	}
+	.answer-reveal--live {
+		-webkit-mask-image: linear-gradient(
+			to bottom,
+			black 0%,
+			black calc(100% - 44px),
+			color-mix(in srgb, black 35%, transparent) 100%
+		);
+		mask-image: linear-gradient(
+			to bottom,
+			black 0%,
+			black calc(100% - 44px),
+			color-mix(in srgb, black 35%, transparent) 100%
+		);
+	}
+	.answer-reveal--live > * > *:last-child {
+		animation: answer-chunk-in 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+	}
+	@keyframes answer-in {
+		from {
+			opacity: 0;
+			filter: blur(4px);
+			transform: translateY(4px);
+		}
+		to {
+			opacity: 1;
+			filter: blur(0);
+			transform: none;
+		}
+	}
+	@keyframes answer-chunk-in {
+		from {
+			opacity: 0.15;
+			filter: blur(3px);
+		}
+		to {
+			opacity: 1;
+			filter: blur(0);
+		}
+	}
+
+	/* Карточка артефакта и варианты опросника всплывают снизу. */
+	.artifact-in {
+		animation: artifact-in 360ms cubic-bezier(0.16, 1, 0.3, 1) both;
+	}
+	@keyframes artifact-in {
+		from {
+			opacity: 0;
+			transform: translateY(6px) scale(0.985);
+		}
+		to {
+			opacity: 1;
+			transform: none;
+		}
+	}
+	.survey-option-in {
+		animation: survey-option-in 500ms ease both;
+	}
+	@keyframes survey-option-in {
+		from {
+			opacity: 0;
+		}
+		to {
+			opacity: 1;
+		}
+	}
+
+	/* Правая панель-браузер выезжает, а не появляется рывком. */
+	.artifact-panel {
+		animation: artifact-panel-in 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
+	}
+	@keyframes artifact-panel-in {
+		from {
+			opacity: 0;
+			transform: translateX(16px);
+		}
+		to {
+			opacity: 1;
+			transform: none;
+		}
+	}
+
+	/* Лицо ассистента «дышит», пока идёт ответ. */
+	.assistant-face--busy {
+		animation: face-pulse 1.8s ease-in-out infinite;
+	}
+	@keyframes face-pulse {
+		0%,
+		100% {
+			transform: scale(1);
+			opacity: 0.9;
+		}
+		50% {
+			transform: scale(1.06);
+			opacity: 1;
+		}
+	}
+
+	/* Rendered markdown answer body. */
+	.prose-notion {
+		@apply text-[1rem] leading-6;
+	}
+	.prose-notion h1 {
+		@apply mt-6 mb-2 text-2xl font-semibold;
+	}
+	.prose-notion h2 {
+		@apply mt-5 mb-2 text-xl font-semibold;
+	}
+	.prose-notion h3 {
+		@apply mt-4 mb-1.5 text-lg font-semibold;
+	}
+	.prose-notion p {
+		@apply my-2;
+	}
+	.prose-notion ul {
+		@apply my-2 list-disc ps-6;
+	}
+	.prose-notion ol {
+		@apply my-2 list-decimal ps-6;
+	}
+	.prose-notion li {
+		@apply my-1;
+	}
+	.prose-notion a {
+		@apply text-brand underline underline-offset-2;
+	}
+	.prose-notion blockquote {
+		@apply my-3 border-s-2 ps-3 text-muted-foreground;
+	}
+	.prose-notion code {
+		@apply bg-accent text-code rounded-sm px-1 py-0.5 font-mono text-[85%];
+	}
+	.prose-notion pre {
+		@apply bg-card my-3 overflow-x-auto rounded-lg border p-3;
+	}
+	.prose-notion pre code {
+		@apply bg-transparent p-0 text-[0.85rem] text-foreground;
+	}
+	.prose-notion table {
+		@apply my-3 w-full border-collapse text-sm;
+	}
+	.prose-notion th,
+	.prose-notion td {
+		@apply border px-2 py-1 text-start;
+	}
+
+	/* ---- состояние инструмента: «подключается» ---------------------- */
+	.tool-status {
+		position: relative;
+		display: inline-grid;
+		place-items: center;
+		width: 12px;
+		height: 12px;
+		flex: none;
+	}
+	.tool-status__dot {
+		width: 5px;
+		height: 5px;
+		border-radius: 9999px;
+		background: var(--blue-accent);
+		animation: tool-dot 1.2s ease-in-out infinite;
+	}
+	.tool-status__ring {
+		position: absolute;
+		inset: 0;
+		border-radius: 9999px;
+		border: 1px solid var(--blue-accent);
+		animation: tool-ring 1.6s ease-out infinite;
+	}
+	@keyframes tool-ring {
+		0% {
+			transform: scale(0.35);
+			opacity: 0.65;
+		}
+		70% {
+			transform: scale(1);
+			opacity: 0;
+		}
+		100% {
+			opacity: 0;
+		}
+	}
+	@keyframes tool-dot {
+		0%,
+		100% {
+			opacity: 0.45;
+		}
+		50% {
+			opacity: 1;
+		}
+	}
+	/* Строка статуса шага мягко появляется и исчезает при смене. */
+	.tool-live > span {
+		animation: tool-live-in 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
+	}
+	@keyframes tool-live-in {
+		from {
+			opacity: 0;
+			transform: translateY(-2px);
+		}
+		to {
+			opacity: 1;
+			transform: none;
+		}
+	}
+
+	/* Каретка печати в конце ответа, пока идёт стриминг. */
+	.answer-reveal--live .prose-notion > *:last-child::after {
+		content: "";
+		display: inline-block;
+		width: 0.42em;
+		height: 1em;
+		margin-inline-start: 2px;
+		vertical-align: -0.15em;
+		border-radius: 2px;
+		background: currentColor;
+		opacity: 0.45;
+		animation: caret-blink 1s steps(1) infinite;
+	}
+	@keyframes caret-blink {
+		0%,
+		49% {
+			opacity: 0.45;
+		}
+		50%,
+		100% {
+			opacity: 0;
+		}
+	}
+}
