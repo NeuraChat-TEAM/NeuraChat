@@ -10,7 +10,7 @@ import (
 // Маршруты сняты с mcp.har: именно их дергает веб-клиент Notion,
 // когда открываешь экран AI Usage.
 const (
-	pathCreditRateLimit = "/api/v3/getCreditRateLimitStatus"
+	pathCreditRateLimit  = "/api/v3/getCreditRateLimitStatus"
 	pathUsageEligibility = "/api/v3/getAIUsageEligibilityV2"
 )
 

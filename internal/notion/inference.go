@@ -35,14 +35,14 @@ type Message struct {
 
 // ChatRequest is the payload the frontend sends for every send/regenerate.
 type ChatRequest struct {
-	ConversationID string    `json:"conversationId"`
-	Model           string   `json:"model"`
-	ReasoningEffort string   `json:"reasoningEffort"`
-	SystemPrompt    string   `json:"systemPrompt"`
+	ConversationID  string `json:"conversationId"`
+	Model           string `json:"model"`
+	ReasoningEffort string `json:"reasoningEffort"`
+	SystemPrompt    string `json:"systemPrompt"`
 	// SearchAllSources = «All sources I can access». По умолчанию выключено:
 	// агент не шарит по всему воркспейсу, пока это явно не разрешили.
-	SearchAllSources bool     `json:"searchAllSources"`
-	Messages       []Message `json:"messages"`
+	SearchAllSources bool      `json:"searchAllSources"`
+	Messages         []Message `json:"messages"`
 }
 
 // conversation keeps the Notion-side identity of a local chat.
@@ -520,9 +520,9 @@ func (r *Runtime) applyMessageEdit(ctx context.Context, convo *conversation, edi
 	_, err := r.client.PostJSON(ctx, "/api/v3/saveTransactionsFanout", map[string]interface{}{
 		"requestId": uid.New(),
 		"transactions": []interface{}{map[string]interface{}{
-			"id":      uid.New(),
-			"spaceId": convo.SpaceID,
-			"debug":   map[string]interface{}{"userAction": "AgentUserStep.saveUserStepChanges", "clientCommitTimeMs": time.Now().UnixMilli()},
+			"id":         uid.New(),
+			"spaceId":    convo.SpaceID,
+			"debug":      map[string]interface{}{"userAction": "AgentUserStep.saveUserStepChanges", "clientCommitTimeMs": time.Now().UnixMilli()},
 			"operations": operations,
 		}},
 	})

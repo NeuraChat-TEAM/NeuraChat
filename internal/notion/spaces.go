@@ -249,9 +249,10 @@ func (c *Client) UseWorkspace(userID, spaceID, spaceViewID, spaceName string) er
 	// Notion сам определит cell по spaceId.
 	delete(cfg.Headers, "x-notion-cell-hint")
 	delete(cfg.Headers, "x-notion-cell-hint-source")
-	if spaceViewID != "" {
-		cfg.SpaceViewID = spaceViewID
-	}
+	// Всегда заменяем spaceViewID. Иначе при переходе в guest/new workspace
+	// без view оставался id предыдущего пространства и MCP-транзакция уходила
+	// в чужой space_view.
+	cfg.SpaceViewID = spaceViewID
 
 	cfg.Template["spaceId"] = spaceID
 	cfg.Template["threadParentPointer"] = map[string]interface{}{
@@ -276,6 +277,8 @@ func (c *Client) UseWorkspace(userID, spaceID, spaceViewID, spaceName string) er
 		value["spaceId"] = spaceID
 		if spaceViewID != "" {
 			value["spaceViewId"] = spaceViewID
+		} else {
+			delete(value, "spaceViewId")
 		}
 		if spaceName != "" {
 			value["spaceName"] = spaceName

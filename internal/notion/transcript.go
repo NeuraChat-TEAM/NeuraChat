@@ -21,8 +21,8 @@ type Event struct {
 	Status string                 `json:"status,omitempty"`
 	// Message — текст ошибки для UI. Раньше ошибки уходили в Delta,
 	// а фронтенд читал ev.message — и потому молчал.
-	Message string                `json:"message,omitempty"`
-	ThreadID string               `json:"threadId,omitempty"`
+	Message  string `json:"message,omitempty"`
+	ThreadID string `json:"threadId,omitempty"`
 }
 
 // part is one projected piece of the assistant turn.
@@ -276,6 +276,21 @@ func inferenceParts(value interface{}) []interface{} {
 func toolResultPayload(step map[string]interface{}) (interface{}, bool) {
 	for _, key := range []string{"output", "result", "value", "content"} {
 		if value, ok := step[key]; ok && value != nil {
+			// headerLabel/headerLabels — промежуточный статус Notion, а не
+			// результат. Не закрываем карточку, пока не появятся реальные данные.
+			if record, ok := value.(map[string]interface{}); ok {
+				substantive := false
+				for field, item := range record {
+					if field == "headerLabel" || field == "headerLabels" || field == "status" || item == nil {
+						continue
+					}
+					substantive = true
+					break
+				}
+				if !substantive {
+					continue
+				}
+			}
 			return value, true
 		}
 	}

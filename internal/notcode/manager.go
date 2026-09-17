@@ -67,6 +67,7 @@ type Options struct {
 	Port        int
 	NgrokPath   string
 	NgrokDomain string
+	NgrokToken  string // injected via environment; never logged or passed on the command line
 	// RotateToken — перегенерировать Bearer-токен перед запуском notcode.
 	// Работает только когда сервер поднимаем мы: у чужого процесса токен
 	// уже в памяти, и перезапись конфига разорвала бы активные сессии.
@@ -746,6 +747,7 @@ func (m *Manager) startNgrok(ctx context.Context, opts Options) error {
 		args = append(args, "--domain="+strings.TrimSpace(opts.NgrokDomain))
 	}
 	cmd := exec.Command(opts.NgrokPath, args...)
+	cmd.Env = append(os.Environ(), "NGROK_AUTHTOKEN="+strings.TrimSpace(opts.NgrokToken))
 	hideWindow(cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

@@ -84,6 +84,36 @@ func (s *Store) CreateThread(title, spaceID string) (Thread, error) {
 	return thread, err
 }
 
+// UpsertThreads сливает список из Notion с локальной базой. Локальные чаты не
+// удаляются: новый чат может ещё не успеть появиться в удалённом списке.
+func (s *Store) UpsertThreads(threads []Thread) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stmt, err := tx.Prepare(`
+INSERT INTO threads (id,title,space_id,created_at,updated_at) VALUES (?,?,?,?,?)
+ON CONFLICT(id) DO UPDATE SET
+  title=excluded.title,
+  space_id=excluded.space_id,
+  created_at=CASE WHEN threads.created_at=0 THEN excluded.created_at ELSE MIN(threads.created_at, excluded.created_at) END,
+  updated_at=MAX(threads.updated_at, excluded.updated_at)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, thread := range threads {
+		if thread.ID == "" {
+			continue
+		}
+		if _, err := stmt.Exec(thread.ID, thread.Title, thread.SpaceID, thread.CreatedAt, thread.UpdatedAt); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // ListThreads отдаёт чаты активного воркспейса. Чаты без привязки (созданные
 // до миграции) показываем везде, чтобы старая история не пропала.
 func (s *Store) ListThreads(spaceID string) ([]Thread, error) {

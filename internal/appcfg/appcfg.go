@@ -9,12 +9,14 @@ import (
 	"sync"
 
 	"neura/internal/dpapi"
+	"neura/internal/ngrokbin"
 )
 
 const (
-	sessionFile  = "notion-session.dpapi"
-	settingsFile = "settings.json"
-	maxSession   = 2 << 20 // 2 MiB, same cap as the Tauri build
+	sessionFile    = "notion-session.dpapi"
+	ngrokTokenFile = "ngrok-authtoken.dpapi"
+	settingsFile   = "settings.json"
+	maxSession     = 2 << 20 // 2 MiB, same cap as the Tauri build
 )
 
 // McpServer — один MCP-сервер, подключённый через приложение. В Notion
@@ -62,13 +64,13 @@ func ForgetMcpServer(list []McpServer, name, serverURL string) []McpServer {
 // Settings is everything the user can tweak from the Settings dialog.
 type Settings struct {
 	// Chat
-	Model            string `json:"model"`
-	ReasoningEffort  string `json:"reasoningEffort"`
-	SystemPrompt     string `json:"systemPrompt"`
-	AutoPrependMcp   bool   `json:"autoPrependMcp"`
-	SendWithEnter    bool   `json:"sendWithEnter"`
+	Model           string `json:"model"`
+	ReasoningEffort string `json:"reasoningEffort"`
+	SystemPrompt    string `json:"systemPrompt"`
+	AutoPrependMcp  bool   `json:"autoPrependMcp"`
+	SendWithEnter   bool   `json:"sendWithEnter"`
 	// SearchAllSources = «All sources I can access». По умолчанию false.
-	SearchAllSources bool   `json:"searchAllSources"`
+	SearchAllSources bool `json:"searchAllSources"`
 
 	// Активный аккаунт и воркспейс (переключатель в сайдбаре).
 	ActiveUserID      string `json:"activeUserId"`
@@ -77,7 +79,7 @@ type Settings struct {
 	ActiveSpaceName   string `json:"activeSpaceName"`
 
 	// Appearance
-	Theme     string `json:"theme"`     // "notion-dark" | "notion-light"
+	Theme     string `json:"theme"` // "notion-dark" | "notion-light"
 	MotionOff bool   `json:"motionOff"`
 	FontScale int    `json:"fontScale"` // percent, 90..120
 
@@ -105,29 +107,29 @@ type Settings struct {
 
 func Defaults() Settings {
 	return Settings{
-		Model:           "",
-		ReasoningEffort: "",
-		SystemPrompt:    "",
-		AutoPrependMcp:  true,
-		SendWithEnter:   true,
+		Model:            "",
+		ReasoningEffort:  "",
+		SystemPrompt:     "",
+		AutoPrependMcp:   true,
+		SendWithEnter:    true,
 		SearchAllSources: false,
-		Theme:           "notion-dark",
-		FontScale:       100,
-		NotcodeCmd:      "bun",
-		NotcodePort:     3000,
-		NgrokPath:       DefaultNgrokPath(),
-		NotcodeDir:      DefaultNotcodeDir(),
-		McpServerName:   "notcode",
+		Theme:            "notion-dark",
+		FontScale:        100,
+		NotcodeCmd:       "bun",
+		NotcodePort:      3000,
+		NgrokPath:        DefaultNgrokPath(),
+		NotcodeDir:       DefaultNotcodeDir(),
+		McpServerName:    "notcode",
+		AutoStart:        true,
 	}
 }
 
 // DefaultNgrokPath prefers a downloaded ngrok.exe next to the user's Downloads
 // folder and falls back to whatever is on PATH.
 func DefaultNgrokPath() string {
-	if home, err := os.UserHomeDir(); err == nil {
-		candidate := filepath.Join(home, "Downloads", "ngrok.exe")
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
+	if base, err := os.UserConfigDir(); err == nil {
+		if executable, err := ngrokbin.Ensure(filepath.Join(base, "Neura", "tools")); err == nil {
+			return executable
 		}
 	}
 	return "ngrok"
@@ -308,4 +310,45 @@ func (s *Store) DeleteSession() error {
 		return err
 	}
 	return nil
+}
+
+func (s *Store) SaveNgrokToken(token string) error {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return errors.New("ngrok authtoken пуст")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	enc, err := dpapi.Protect([]byte(token))
+	if err != nil {
+		return err
+	}
+	return s.writeAtomic(ngrokTokenFile, enc)
+}
+
+func (s *Store) LoadNgrokToken() (string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	raw, err := os.ReadFile(s.path(ngrokTokenFile))
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	plain, err := dpapi.Unprotect(raw)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(plain)), nil
+}
+
+func (s *Store) DeleteNgrokToken() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	err := os.Remove(s.path(ngrokTokenFile))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
 }

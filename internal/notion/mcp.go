@@ -160,8 +160,8 @@ func (c *Client) ValidateMcp(ctx context.Context, serverURL, token string) ([]Mc
 }
 
 // describeMcpError переводит сырой ответ Notion в понятный текст.
-// Главный случай: 403 ForbiddenError с debugMessage «Custom MCP servers are
-// disabled for this workspace» — это настройка воркспейса, а не баг приложения.
+// Сообщение про disabled часто является побочным 403 при несовпадении
+// active user / space / space_view, поэтому не обвиняем настройки workspace.
 func describeMcpError(err error) error {
 	if err == nil {
 		return nil
@@ -170,7 +170,7 @@ func describeMcpError(err error) error {
 	lower := strings.ToLower(text)
 	switch {
 	case strings.Contains(lower, "custom mcp servers are disabled"):
-		return errors.New("в этом воркспейсе запрещены кастомные MCP-серверы. Владелец воркспейса должен включить их в Notion → Settings → AI (Connections / MCP), либо переключитесь на воркспейс, где они разрешены (вкладка «Воркспейсы»)")
+		return errors.New("Notion вернул 403 при регистрации MCP. Подробный ответ сохранён в диагностике")
 	case strings.Contains(lower, "forbiddenerror") || strings.Contains(text, "403"):
 		return fmt.Errorf("Notion отказал в доступе (403). Проверьте права в воркспейсе и свежесть сессии: %s", text)
 	case strings.Contains(lower, "unauthorized") || strings.Contains(text, "401"):
@@ -195,9 +195,9 @@ func mcpErrorText(payload map[string]interface{}) string {
 	return "сервер ответил отказом"
 }
 
-// ConnectMcp повторяет цепочку веб-клиента:
-// validateMcpConnection -> postWorkflowsMcpServerConnect ->
-// space_view.settings.agent_chat_modules -> updateMcpServerModuleSettings.
+// ConnectMcp повторяет цепочку из HAR веб-клиента:
+// checkMcpOAuthSupport -> validateMcpConnection -> postWorkflowsMcpServerConnect
+// -> saveTransactionsFanout(space_view.settings.agent_chat_modules).
 func (c *Client) ConnectMcp(ctx context.Context, in ConnectMcpInput) (*McpModule, error) {
 	cfg, err := c.require()
 	if err != nil {
@@ -212,23 +212,27 @@ func (c *Client) ConnectMcp(ctx context.Context, in ConnectMcpInput) (*McpModule
 		name = "notcode"
 	}
 
-	// 1. Проверка: Notion сам стучится на сервер и получает список тулзов.
+	// 1. Discovery OAuth — отдельный первый запрос веб-клиента. Он не заменяет
+	// Bearer-валидацию, но ловит невалидный URL до регистрации модуля.
+	if _, err := c.CheckMcpOAuth(ctx, serverURL); err != nil {
+		return nil, describeMcpError(err)
+	}
+
+	// 2. Проверка: Notion сам стучится на сервер и получает список тулзов.
 	tools, official, err := c.ValidateMcp(ctx, serverURL, in.Token)
 	if err != nil {
 		return nil, err
 	}
 
-	// 2. Создание workflow_module. integrationId генерирует клиент.
+	// 3. Создание workflow_module. integrationId генерирует клиент.
 	integrationID := uid.New()
+	// Точная форма moduleDefinition из HAR: флаги автозапуска сюда не входят.
+	moduleDefinition := map[string]interface{}{"name": name, "serverUrl": serverURL}
 	created, err := c.PostJSON(ctx, c.mcpPath("connect", pathConnect), map[string]interface{}{
-		"integrationId": integrationID,
-		"spaceId":       cfg.SpaceID,
-		"authHeaders":   c.authHeaders(in.Token),
-		"moduleDefinition": map[string]interface{}{
-			"name":                       name,
-			"serverUrl":                  serverURL,
-			"runWriteToolsAutomatically": in.AutoWrite,
-		},
+		"integrationId":     integrationID,
+		"spaceId":           cfg.SpaceID,
+		"authHeaders":       c.authHeaders(in.Token),
+		"moduleDefinition":  moduleDefinition,
 		"initiationContext": "connect",
 	})
 	if err != nil {
@@ -257,29 +261,13 @@ func (c *Client) ConnectMcp(ctx context.Context, in ConnectMcpInput) (*McpModule
 		Tools:         tools,
 	}
 
-	// 3. Включаем модуль в чате (agent_chat_modules у space_view).
+	// 4. HAR после connect добавляет pointer workflow_module в
+	// space_view.settings.agent_chat_modules через saveTransactionsFanout.
+	// Без этого модуль установлен, но не появляется в текущем AI-чате.
 	if err := c.addAgentChatModule(ctx, cfg.SpaceViewID, integrationID); err != nil {
 		module.Enabled = false
-		return module, fmt.Errorf("сервер зарегистрирован, но не включён в чате: %w", err)
+		return module, fmt.Errorf("MCP зарегистрирован, но не добавлен в текущий чат: %w", err)
 	}
-
-	// 4. Разрешаем запуск инструментов без подтверждений.
-	// В HAR этот шаг есть (updateMcpServerModuleSettings -> 200 + recordMap),
-	// но он необязательный: базовый режим Notion уже берёт из
-	// moduleDefinition.runWriteToolsAutomatically на шаге 2. Поэтому ошибку
-	// здесь только показываем предупреждением, а подключение считаем успешным —
-	// раньше отказ на этом шаге валил весь коннект.
-	if _, err := c.PostJSON(ctx, c.mcpPath("settings", pathModuleSetting), map[string]interface{}{
-		"spaceId":  cfg.SpaceID,
-		"moduleId": integrationID,
-		"settings": map[string]interface{}{
-			"runReadToolsAutomatically":  true,
-			"runWriteToolsAutomatically": in.AutoWrite,
-		},
-	}); err != nil {
-		module.SettingsWarning = fmt.Sprintf("авто-запуск инструментов не настроен: %v", err)
-	}
-
 	return module, nil
 }
 

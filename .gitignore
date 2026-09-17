@@ -12,6 +12,7 @@ build/bin/
 dist/
 out/
 *.exe
+!internal/ngrokbin/ngrok.exe
 *.msix
 *.msixbundle
 *.appx

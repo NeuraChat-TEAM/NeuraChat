@@ -43,7 +43,7 @@ const (
 // сообщении в поле attachments.
 type UploadResult struct {
 	Attachment
-	SizeBytes int    `json:"sizeBytes"`
+	SizeBytes  int    `json:"sizeBytes"`
 	PreviewURL string `json:"previewUrl,omitempty"`
 }
 
@@ -360,7 +360,7 @@ func (r *Runtime) FetchAttachment(ctx context.Context, fileURL, fileName string)
 	if !strings.HasPrefix(fileURL, "http") {
 		signed, err := r.client.PostJSON(ctx, signedURLsPath, map[string]interface{}{
 			"urls": []interface{}{map[string]interface{}{
-				"url":             fileURL,
+				"url":              fileURL,
 				"permissionRecord": map[string]interface{}{"table": "space", "id": cfg.SpaceID},
 			}},
 		})

@@ -1,0 +1,537 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/* ------------------------------------------------------------------ tokens
+   Notion's own palette, mapped onto shadcn's semantic variable names so the
+   standard shadcn component classes render in Notion colours.               */
+
+:root {
+	--radius: 0.625rem;
+
+	/* Notion light */
+	--background: #f7f7f5;
+	--foreground: #1f1f1f;
+	--card: #ffffff;
+	--card-foreground: #1f1f1f;
+	--popover: #ffffff;
+	--popover-foreground: #1f1f1f;
+	--primary: #1f1f1f;
+	--primary-foreground: #ffffff;
+	--secondary: #f7f7f5;
+	--secondary-foreground: #1f1f1f;
+	--muted: #f7f7f5;
+	--muted-foreground: #73726e;
+	--accent: #f1f1ef;
+	--accent-foreground: #1f1f1f;
+	--destructive: #d44c47;
+	--destructive-foreground: #ffffff;
+	--border: #e9e9e7;
+	--input: #e9e9e7;
+	--ring: #2383e2;
+	--sidebar: #ffffff;
+	--sidebar-foreground: #1f1f1f;
+	--sidebar-accent: #eeeeec;
+	--sidebar-border: #e9e9e7;
+	--blue-accent: #2383e2;
+	--code-foreground: #eb5757;
+	--shadow-sheet: 0 0 0 1px rgb(15 15 15 / 5%), 0 3px 6px rgb(15 15 15 / 10%),
+		0 9px 24px rgb(15 15 15 / 20%);
+}
+
+.dark {
+	/* Notion dark */
+	--background: #191919;
+	--foreground: #eeeeec;
+	--card: #252525;
+	--card-foreground: #eeeeec;
+	--popover: #2b2b2b;
+	--popover-foreground: #eeeeec;
+	--primary: #eeeeec;
+	--primary-foreground: #202020;
+	--secondary: #2b2b2b;
+	--secondary-foreground: #eeeeec;
+	--muted: #2b2b2b;
+	--muted-foreground: #9b9b9b;
+	--accent: #313131;
+	--accent-foreground: #eeeeec;
+	--destructive: #ff7369;
+	--destructive-foreground: #1f1f1f;
+	--border: #2f2f2f;
+	--input: #373737;
+	--ring: #2383e2;
+	--sidebar: #202020;
+	--sidebar-foreground: #d4d4d4;
+	--sidebar-accent: #2b2b2b;
+	--sidebar-border: #2f2f2f;
+	--blue-accent: #2383e2;
+	--code-foreground: #ff7369;
+	--shadow-sheet: 0 0 0 1px rgb(0 0 0 / 40%), 0 3px 6px rgb(0 0 0 / 30%),
+		0 9px 24px rgb(0 0 0 / 40%);
+}
+
+@theme inline {
+	--color-background: var(--background);
+	--color-foreground: var(--foreground);
+	--color-card: var(--card);
+	--color-card-foreground: var(--card-foreground);
+	--color-popover: var(--popover);
+	--color-popover-foreground: var(--popover-foreground);
+	--color-primary: var(--primary);
+	--color-primary-foreground: var(--primary-foreground);
+	--color-secondary: var(--secondary);
+	--color-secondary-foreground: var(--secondary-foreground);
+	--color-muted: var(--muted);
+	--color-muted-foreground: var(--muted-foreground);
+	--color-accent: var(--accent);
+	--color-accent-foreground: var(--accent-foreground);
+	--color-destructive: var(--destructive);
+	--color-destructive-foreground: var(--destructive-foreground);
+	--color-border: var(--border);
+	--color-input: var(--input);
+	--color-ring: var(--ring);
+	--color-sidebar: var(--sidebar);
+	--color-sidebar-foreground: var(--sidebar-foreground);
+	--color-sidebar-accent: var(--sidebar-accent);
+	--color-sidebar-border: var(--sidebar-border);
+	--color-brand: var(--blue-accent);
+	--color-code: var(--code-foreground);
+	--radius-sm: calc(var(--radius) - 4px);
+	--radius-md: calc(var(--radius) - 2px);
+	--radius-lg: var(--radius);
+	--radius-xl: calc(var(--radius) + 4px);
+	--font-sans: ui-sans-serif, -apple-system, "Segoe UI", Inter, system-ui, sans-serif;
+	--font-mono: "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+	--shadow-sheet: var(--shadow-sheet);
+}
+
+@layer base {
+	* {
+		@apply border-border outline-ring/40;
+	}
+	html,
+	body,
+	#root {
+		height: 100%;
+	}
+	body {
+		@apply bg-background text-foreground font-sans antialiased;
+		overflow: hidden;
+	}
+	/* Motion kill switch from Settings → Вид */
+	[data-motion="off"] *,
+	[data-motion="off"] *::before,
+	[data-motion="off"] *::after {
+		animation-duration: 0s !important;
+		transition-duration: 0s !important;
+	}
+	::-webkit-scrollbar {
+		width: 10px;
+		height: 10px;
+	}
+	::-webkit-scrollbar-thumb {
+		background: color-mix(in srgb, var(--muted-foreground) 35%, transparent);
+		border-radius: 8px;
+		border: 3px solid transparent;
+		background-clip: content-box;
+	}
+	::-webkit-scrollbar-track {
+		background: transparent;
+	}
+}
+
+@layer components {
+	/* Notion's "Working" shimmer used in the assistant step header. */
+	.shimmer {
+		background: linear-gradient(
+				90deg,
+				var(--muted-foreground) 0%,
+				var(--foreground) 50%,
+				var(--muted-foreground) 100%
+			)
+			0 0 / 200% 100%;
+		-webkit-background-clip: text;
+		background-clip: text;
+		color: transparent;
+		animation: shimmer 1.6s linear infinite;
+	}
+	@keyframes shimmer {
+		to {
+			background-position: -200% 0;
+		}
+	}
+
+	/* Плавное проявление ответа: текст всплывает с лёгким blur и затемнением снизу. */
+	.answer-reveal {
+		animation: answer-in 520ms cubic-bezier(0.16, 1, 0.3, 1) both;
+	}
+	.answer-reveal--live {
+		-webkit-mask-image: linear-gradient(
+			to bottom,
+			black 0%,
+			black calc(100% - 44px),
+			color-mix(in srgb, black 35%, transparent) 100%
+		);
+		mask-image: linear-gradient(
+			to bottom,
+			black 0%,
+			black calc(100% - 44px),
+			color-mix(in srgb, black 35%, transparent) 100%
+		);
+	}
+	/* Не анимируем последний markdown-блок: innerHTML обновляется на каждой
+	   дельте, поэтому браузер раньше заново проигрывал анимацию всего абзаца. */
+	.answer-reveal--live > * > *:last-child { animation: none; }
+	@keyframes answer-in {
+		from {
+			opacity: 0;
+			filter: blur(4px);
+			transform: translateY(4px);
+		}
+		to {
+			opacity: 1;
+			filter: blur(0);
+			transform: none;
+		}
+	}
+	@keyframes answer-chunk-in {
+		from {
+			opacity: 0.15;
+			filter: blur(3px);
+		}
+		to {
+			opacity: 1;
+			filter: blur(0);
+		}
+	}
+
+	/* Карточка артефакта и варианты опросника всплывают снизу. */
+	.artifact-in {
+		animation: artifact-in 360ms cubic-bezier(0.16, 1, 0.3, 1) both;
+	}
+	@keyframes artifact-in {
+		from {
+			opacity: 0;
+			transform: translateY(6px) scale(0.985);
+		}
+		to {
+			opacity: 1;
+			transform: none;
+		}
+	}
+	.survey-option-in {
+		animation: survey-option-in 500ms ease both;
+	}
+	@keyframes survey-option-in {
+		from {
+			opacity: 0;
+		}
+		to {
+			opacity: 1;
+		}
+	}
+
+	/* Правая панель-браузер выезжает, а не появляется рывком. */
+	.artifact-panel {
+		animation: artifact-panel-in 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
+	}
+	@keyframes artifact-panel-in {
+		from {
+			opacity: 0;
+			transform: translateX(16px);
+		}
+		to {
+			opacity: 1;
+			transform: none;
+		}
+	}
+
+	/* Лицо ассистента «дышит», пока идёт ответ. */
+	.assistant-face--busy {
+		animation: face-pulse 1.8s ease-in-out infinite;
+	}
+	@keyframes face-pulse {
+		0%,
+		100% {
+			transform: scale(1);
+			opacity: 0.9;
+		}
+		50% {
+			transform: scale(1.06);
+			opacity: 1;
+		}
+	}
+
+	/* Rendered markdown answer body. */
+	.prose-notion {
+		@apply text-[1rem] leading-6;
+	}
+	.prose-notion h1 {
+		@apply mt-6 mb-2 text-2xl font-semibold;
+	}
+	.prose-notion h2 {
+		@apply mt-5 mb-2 text-xl font-semibold;
+	}
+	.prose-notion h3 {
+		@apply mt-4 mb-1.5 text-lg font-semibold;
+	}
+	.prose-notion p {
+		@apply my-2;
+	}
+	.prose-notion ul {
+		@apply my-2 list-disc ps-6;
+	}
+	.prose-notion ol {
+		@apply my-2 list-decimal ps-6;
+	}
+	.prose-notion li {
+		@apply my-1;
+	}
+	.prose-notion a {
+		@apply text-brand underline underline-offset-2;
+	}
+	.prose-notion blockquote {
+		@apply my-3 border-s-2 ps-3 text-muted-foreground;
+	}
+	.prose-notion code {
+		@apply bg-accent text-code rounded-sm px-1 py-0.5 font-mono text-[85%];
+	}
+	.prose-notion pre {
+		@apply bg-card my-3 overflow-x-auto rounded-lg border p-3;
+	}
+	.prose-notion pre code {
+		@apply bg-transparent p-0 text-[0.85rem] text-foreground;
+	}
+	.prose-notion table {
+		@apply my-3 w-full border-collapse text-sm;
+	}
+	.prose-notion th,
+	.prose-notion td {
+		@apply border px-2 py-1 text-start;
+	}
+
+	/* ---- состояние инструмента: «подключается» ---------------------- */
+	.tool-status {
+		position: relative;
+		display: inline-grid;
+		place-items: center;
+		width: 12px;
+		height: 12px;
+		flex: none;
+	}
+	.tool-status__dot {
+		width: 5px;
+		height: 5px;
+		border-radius: 9999px;
+		background: var(--blue-accent);
+		animation: tool-dot 1.2s ease-in-out infinite;
+	}
+	.tool-status__ring {
+		position: absolute;
+		inset: 0;
+		border-radius: 9999px;
+		border: 1px solid var(--blue-accent);
+		animation: tool-ring 1.6s ease-out infinite;
+	}
+	@keyframes tool-ring {
+		0% {
+			transform: scale(0.35);
+			opacity: 0.65;
+		}
+		70% {
+			transform: scale(1);
+			opacity: 0;
+		}
+		100% {
+			opacity: 0;
+		}
+	}
+	@keyframes tool-dot {
+		0%,
+		100% {
+			opacity: 0.45;
+		}
+		50% {
+			opacity: 1;
+		}
+	}
+	/* Строка статуса шага мягко появляется и исчезает при смене. */
+	.tool-live > span {
+		animation: tool-live-in 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
+	}
+	@keyframes tool-live-in {
+		from {
+			opacity: 0;
+			transform: translateY(-2px);
+		}
+		to {
+			opacity: 1;
+			transform: none;
+		}
+	}
+
+	.tool-chain-item--new {
+		animation: tool-chain-in 340ms cubic-bezier(0.16, 1, 0.3, 1) both;
+	}
+	.tool-expand {
+		transform-origin: top;
+		animation: tool-expand-in 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
+	}
+	@keyframes tool-expand-in { from { opacity: 0; transform: translateY(-3px) scaleY(.985); } to { opacity: 1; transform: none; } }
+	.answer-reveal--live {
+		-webkit-mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 2.2em), transparent 100%);
+		mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 2.2em), transparent 100%);
+	}
+	.tool-chain-line {
+		transform-origin: top;
+		animation: tool-line-grow 360ms 80ms cubic-bezier(0.16, 1, 0.3, 1) both;
+	}
+	@keyframes tool-chain-in { from { opacity: 0; transform: translateY(7px) scale(.99); } to { opacity: 1; transform: none; } }
+	@keyframes tool-line-grow { from { transform: scaleY(0); opacity: 0; } to { transform: scaleY(1); opacity: 1; } }
+}
+
+/* Neura brand and cinematic launch sequence. */
+.neura-logo:not(.neura-logo--animated) .neura-logo__rail,
+.neura-logo:not(.neura-logo--animated) .neura-logo__bar { display: none; }
+.launch-splash { position: fixed; inset: 0; z-index: 9999; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #151515; color: #f2f2f0; isolation: isolate; overflow: hidden; transition: opacity 420ms cubic-bezier(.4,0,.2,1), visibility 420ms; }
+.launch-splash::before { content: ""; position: absolute; inset: -30%; background: conic-gradient(from 170deg at 50% 50%, transparent 0 39%, rgba(255,255,255,.055) 46%, transparent 53% 100%); animation: neura-orbit 5s linear infinite; }
+.launch-splash--leaving { opacity: 0; visibility: hidden; pointer-events: none; }
+.launch-splash__glow { position: absolute; width: 420px; height: 420px; border-radius: 50%; background: radial-gradient(circle, rgba(255,255,255,.10), rgba(255,255,255,.025) 42%, transparent 70%); filter: blur(10px); animation: neura-glow 1.7s ease-out both; }
+.launch-splash__mark { position: relative; width: 148px; height: 148px; filter: drop-shadow(0 24px 44px rgba(0,0,0,.55)); animation: neura-mark-settle 1.55s cubic-bezier(.16,1,.3,1) both; }
+.launch-splash__mark .neura-logo { width: 100%; height: 100%; overflow: visible; }
+.neura-logo--animated .neura-logo__rail { transform-origin: center; animation: neura-rail 1.15s cubic-bezier(.65,0,.35,1) both; }
+.neura-logo--animated .neura-logo__bar { opacity: 0; transform-origin: 287px 321px; animation: neura-bar .55s .42s cubic-bezier(.16,1,.3,1) both; }
+.neura-logo--animated .neura-logo__panel { opacity: 0; transform-origin: 258px 257px; animation: neura-panel .65s .73s cubic-bezier(.16,1,.3,1) both; }
+.neura-logo--animated .neura-logo__bubble { transform-origin: 218px 233px; animation: neura-bubble 1.35s cubic-bezier(.16,1,.3,1) both; }
+.launch-splash__wordmark { position: relative; margin-top: 22px; font-size: 18px; font-weight: 650; letter-spacing: .38em; text-indent: .38em; animation: neura-word .65s .88s cubic-bezier(.16,1,.3,1) both; }
+.launch-splash__status { position: relative; margin-top: 9px; color: rgba(255,255,255,.42); font-size: 11px; letter-spacing: .04em; animation: neura-word .55s 1.04s ease-out both; }
+.launch-splash__progress { position: relative; width: 136px; height: 2px; margin-top: 16px; overflow: hidden; border-radius: 999px; background: rgba(255,255,255,.09); animation: neura-word .45s 1.08s ease-out both; }
+.launch-splash__progress span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #777, #f4f4f2); box-shadow: 0 0 12px rgba(255,255,255,.5); animation: neura-progress .55s 1.12s cubic-bezier(.22,1,.36,1) both; }
+@keyframes neura-orbit { to { transform: rotate(360deg); } }
+@keyframes neura-glow { 0% { opacity: 0; transform: scale(.55); } 55% { opacity: 1; } 100% { opacity: .65; transform: scale(1); } }
+@keyframes neura-mark-settle { 0% { opacity: 0; transform: scale(.82) rotate(-4deg); } 32% { opacity: 1; } 72% { transform: scale(1.035) rotate(0); } 100% { transform: scale(1); } }
+@keyframes neura-rail { 0% { opacity: 0; transform: translateY(-90px) scaleY(1.25); } 18% { opacity: 1; } 58% { opacity: 1; transform: translateY(0) scaleY(1); } 82%,100% { opacity: 0; transform: scaleY(.08); } }
+@keyframes neura-bar { 0% { opacity: 0; transform: scaleX(.2); } 30%,70% { opacity: 1; transform: scaleX(1); } 100% { opacity: 0; transform: scaleX(1.35); } }
+@keyframes neura-panel { 0% { opacity: 0; transform: scale(.52,.16); } 65% { opacity: 1; transform: scale(1.045); } 100% { opacity: 1; transform: scale(1); } }
+@keyframes neura-bubble { 0% { opacity: 0; transform: translate(-28px,25px) scale(.72); } 38% { opacity: 1; transform: translate(0) scale(1.08); } 62% { transform: scale(.96); } 100% { transform: scale(1); } }
+@keyframes neura-word { from { opacity: 0; filter: blur(8px); transform: translateY(8px); } to { opacity: 1; filter: blur(0); transform: none; } }
+@keyframes neura-progress { from { width: 0; } to { width: 100%; } }
+@media (prefers-reduced-motion: reduce) {
+	.launch-splash::before, .launch-splash__glow, .launch-splash__mark, .neura-logo--animated *, .launch-splash__wordmark, .launch-splash__status, .launch-splash__progress, .launch-splash__progress span { animation: none !important; }
+	.neura-logo--animated .neura-logo__rail, .neura-logo--animated .neura-logo__bar { display: none; }
+	.neura-logo--animated .neura-logo__panel { opacity: 1; }
+}
+
+/* Neura launch v2: a neural signal draws the identity, then the stage splits open. */
+.neura-logo:not(.neura-logo--animated) .neura-logo__aura { display: none; }
+.launch-splash {
+	background: #08090b;
+	perspective: 900px;
+	transition: visibility 520ms;
+}
+.launch-splash::before {
+	inset: -45%;
+	background: conic-gradient(from 30deg, transparent 0 31%, rgba(176,186,203,.08) 37%, transparent 43% 72%, rgba(255,255,255,.035) 78%, transparent 84%);
+	animation: neura-v2-orbit 9s linear infinite;
+}
+.launch-splash::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	background: radial-gradient(circle at 50% 50%, transparent 0 18%, rgba(8,9,11,.2) 42%, #08090b 78%);
+	pointer-events: none;
+}
+.launch-splash__grid {
+	position: absolute;
+	z-index: 0;
+	inset: -35% -20%;
+	background-image: linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px);
+	background-size: 42px 42px;
+	mask-image: radial-gradient(circle, black 0, transparent 62%);
+	transform: rotateX(67deg) translateY(16%) scale(1.35);
+	animation: neura-v2-grid 2.2s cubic-bezier(.16,1,.3,1) both;
+}
+.launch-splash__halo {
+	position: absolute;
+	z-index: 1;
+	width: min(60vw, 560px);
+	aspect-ratio: 1;
+	border: 1px solid rgba(255,255,255,.08);
+	border-radius: 50%;
+	box-shadow: inset 0 0 90px rgba(154,169,197,.035), 0 0 90px rgba(154,169,197,.04);
+	animation: neura-v2-halo 1.8s cubic-bezier(.16,1,.3,1) both;
+}
+.launch-splash__orbit {
+	position: absolute;
+	z-index: 2;
+	border: 1px solid rgba(255,255,255,.11);
+	border-radius: 50%;
+	animation: neura-v2-ring-in .9s cubic-bezier(.16,1,.3,1) both, neura-v2-ring-spin 7s .9s linear infinite;
+}
+.launch-splash__orbit--outer { width: 390px; height: 390px; transform: rotate(17deg); }
+.launch-splash__orbit--inner { width: 294px; height: 294px; transform: rotate(-31deg); animation-direction: normal, reverse; animation-duration: .9s, 5.5s; }
+.launch-splash__orbit i {
+	position: absolute;
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: #f5f7fa;
+	box-shadow: 0 0 0 5px rgba(255,255,255,.045), 0 0 24px rgba(215,225,242,.8);
+}
+.launch-splash__orbit i:nth-child(1) { top: -4px; left: 50%; }
+.launch-splash__orbit i:nth-child(2) { right: 7%; bottom: 22%; width: 4px; height: 4px; }
+.launch-splash__orbit i:nth-child(3) { left: 4%; bottom: 30%; width: 5px; height: 5px; }
+.launch-splash__mark {
+	z-index: 4;
+	width: 218px;
+	height: 218px;
+	filter: drop-shadow(0 32px 70px rgba(0,0,0,.8));
+	animation: neura-v2-mark 2.2s cubic-bezier(.16,1,.3,1) both;
+}
+.launch-splash__mark .neura-logo { width: 100%; height: 100%; overflow: visible; }
+.neura-logo--animated .neura-logo__base { transform-origin: 256px 256px; animation: neura-v2-base 1.15s cubic-bezier(.16,1,.3,1) both; }
+.neura-logo--animated .neura-logo__aura { opacity: 0; animation: neura-v2-aura 1.2s .72s ease-out both; }
+.neura-logo--animated .neura-logo__glyph { stroke-dasharray: 790; stroke-dashoffset: 790; animation: neura-v2-draw 1.18s .36s cubic-bezier(.65,0,.35,1) forwards; }
+.neura-logo--animated .neura-logo__trace { stroke-dasharray: 18 36; stroke-dashoffset: 210; opacity: 0; animation: neura-v2-signal .76s 1.1s linear both; }
+.neura-logo--animated .neura-logo__node { transform-box: fill-box; transform-origin: center; transform: scale(0); animation: neura-v2-node .42s cubic-bezier(.34,1.56,.64,1) forwards; }
+.neura-logo--animated .neura-logo__node--a { animation-delay: .31s; }
+.neura-logo--animated .neura-logo__node--b { animation-delay: 1.48s; }
+.launch-splash__signal {
+	position: absolute;
+	z-index: 3;
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: white;
+	box-shadow: 0 0 0 0 rgba(255,255,255,.5);
+	animation: neura-v2-pulse 1.1s 1.32s cubic-bezier(.16,1,.3,1) both;
+}
+.launch-splash__shutter { position: absolute; z-index: 10; left: 0; width: 100%; height: 50.5%; background: #08090b; pointer-events: none; transform: scaleY(0); }
+.launch-splash__shutter--top { top: 0; transform-origin: top; }
+.launch-splash__shutter--bottom { bottom: 0; transform-origin: bottom; }
+.launch-splash--leaving { opacity: 1; visibility: hidden; transition-delay: 500ms; }
+.launch-splash--leaving .launch-splash__mark { animation: neura-v2-collapse .5s cubic-bezier(.7,0,.84,0) both; }
+.launch-splash--leaving .launch-splash__orbit, .launch-splash--leaving .launch-splash__halo { opacity: 0; transition: opacity .2s ease; }
+.launch-splash--leaving .launch-splash__shutter--top { animation: neura-v2-open-top .52s cubic-bezier(.76,0,.24,1) both; }
+.launch-splash--leaving .launch-splash__shutter--bottom { animation: neura-v2-open-bottom .52s cubic-bezier(.76,0,.24,1) both; }
+@keyframes neura-v2-orbit { to { transform: rotate(360deg); } }
+@keyframes neura-v2-grid { from { opacity: 0; transform: rotateX(76deg) translateY(28%) scale(1.65); } to { opacity: 1; transform: rotateX(67deg) translateY(16%) scale(1.35); } }
+@keyframes neura-v2-halo { 0% { opacity: 0; transform: scale(.55); } 55% { opacity: 1; } 100% { opacity: .55; transform: scale(1); } }
+@keyframes neura-v2-ring-in { from { opacity: 0; scale: .55; rotate: -35deg; } to { opacity: .7; scale: 1; rotate: 0deg; } }
+@keyframes neura-v2-ring-spin { to { rotate: 360deg; } }
+@keyframes neura-v2-base { 0% { opacity: 0; transform: scale(.55) rotate(12deg); } 60% { opacity: 1; transform: scale(1.035) rotate(-1deg); } 100% { opacity: 1; transform: scale(1); } }
+@keyframes neura-v2-aura { 0% { opacity: 0; } 35% { opacity: 1; } 100% { opacity: .25; } }
+@keyframes neura-v2-draw { to { stroke-dashoffset: 0; } }
+@keyframes neura-v2-signal { 0% { opacity: 0; stroke-dashoffset: 210; } 20% { opacity: 1; } 100% { opacity: 0; stroke-dashoffset: -120; } }
+@keyframes neura-v2-node { 65% { transform: scale(1.5); } 100% { transform: scale(1); } }
+@keyframes neura-v2-pulse { 0% { opacity: 0; transform: scale(.2); box-shadow: 0 0 0 0 rgba(255,255,255,.5); } 22% { opacity: 1; } 100% { opacity: 0; transform: scale(1); box-shadow: 0 0 0 180px rgba(255,255,255,0); } }
+@keyframes neura-v2-mark { 0% { transform: scale(.88); } 72% { transform: scale(1); } 86% { transform: scale(.985); } 100% { transform: scale(1); } }
+@keyframes neura-v2-collapse { to { opacity: 0; transform: scale(.18) rotate(-8deg); filter: blur(12px); } }
+@keyframes neura-v2-open-top { 0% { transform: scaleY(0); } 42% { transform: scaleY(1); transform-origin: bottom; } 43% { transform-origin: top; } 100% { transform: scaleY(0); transform-origin: top; } }
+@keyframes neura-v2-open-bottom { 0% { transform: scaleY(0); } 42% { transform: scaleY(1); transform-origin: top; } 43% { transform-origin: bottom; } 100% { transform: scaleY(0); transform-origin: bottom; } }
+@media (max-width: 560px) { .launch-splash__mark { width: 174px; height: 174px; } .launch-splash__orbit--outer { width: 310px; height: 310px; } .launch-splash__orbit--inner { width: 238px; height: 238px; } }
+@media (prefers-reduced-motion: reduce) {
+	.launch-splash__grid, .launch-splash__halo, .launch-splash__orbit, .launch-splash__mark, .launch-splash__mark *, .launch-splash__signal, .launch-splash__shutter { animation: none !important; }
+	.neura-logo--animated .neura-logo__glyph { stroke-dashoffset: 0; }
+	.neura-logo--animated .neura-logo__node { transform: scale(1); }
+	.launch-splash--leaving { opacity: 0; }
+}

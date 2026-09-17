@@ -192,9 +192,9 @@ func ParseCurl(source string) (*Config, error) {
 	}
 
 	return &Config{
-		Origin:   parsed.Scheme + "://" + parsed.Host,
-		Headers:  filtered,
-		Template: template,
+		Origin:      parsed.Scheme + "://" + parsed.Host,
+		Headers:     filtered,
+		Template:    template,
 		SpaceID:     spaceID,
 		UserID:      userID,
 		SpaceViewID: spaceViewID,
