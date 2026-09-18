@@ -134,16 +134,11 @@ func (a *App) ConnectNotcodeMcp() (ConnectNotcodeResult, error) {
 		mcpPath = notcode.DefaultMcpPath
 	}
 	serverURL := strings.TrimRight(status.PublicURL, "/") + mcpPath
-	// Имя содержит хвост текущего bearer-токена: после ротации сразу видно,
-	// какое подключение актуально, не раскрывая сам секрет.
-	suffix := status.Token
-	if len(suffix) > 6 {
-		suffix = suffix[len(suffix)-6:]
-	}
-	name := "notcode-" + suffix
-	if suffix == "" {
-		name = "notcode"
-	}
+	// У встроенного сервера одно стабильное имя. Раньше к нему добавлялся
+	// хвост токена, поэтому после каждого переподключения Notion и список
+	// интеграций копили notcode-xxxxxx.
+	name := "notcode"
+	previousModules, _ := a.client.ListMcp(a.ctx)
 
 	// Проверяем туннель и токен ДО регистрации в Notion:
 	// иначе Notion сохраняет нерабочий адрес и падает позже, без объяснений.
@@ -160,6 +155,18 @@ func (a *App) ConnectNotcodeMcp() (ConnectNotcodeResult, error) {
 	if err != nil {
 		// Частичный успех (сервер создан, но не включён) тоже возвращаем в UI.
 		return ConnectNotcodeResult{Status: status, Module: module}, err
+	}
+
+	// Новый модуль уже проверен и подключён — теперь безопасно удаляем прежние
+	// встроенные NotCode-модули. Если подключение нового упало, старый остаётся.
+	for _, old := range previousModules {
+		oldName := strings.ToLower(strings.TrimSpace(old.Name))
+		if old.IntegrationID == module.IntegrationID || (oldName != "notcode" && !strings.HasPrefix(oldName, "notcode-")) {
+			continue
+		}
+		if err := a.client.DisconnectMcp(a.ctx, old.IntegrationID); err == nil {
+			settings.McpServers = appcfg.ForgetMcpServer(settings.McpServers, old.Name, old.ServerURL)
+		}
 	}
 
 	// Remember the module so it can be disconnected later, and pre-fill the

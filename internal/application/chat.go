@@ -52,7 +52,13 @@ func (a *App) SendMessage(payload SendPayload) error {
 		// «All sources I can access» по умолчанию выключено.
 		SearchAllSources: settings.SearchAllSources,
 		Messages:         payload.Messages,
-	}, a.emit)
+	}, func(event notion.Event) {
+		// События нескольких одновременных чатов идут по одному Wails-каналу.
+		// ThreadID позволяет фронтенду обновить нужный чат, даже если пользователь
+		// уже открыл другой и отправил там новый запрос.
+		event.ThreadID = payload.ThreadID
+		a.emit(event)
+	})
 }
 
 // UploadPayload — один файл из композера: содержимое идёт base64,
@@ -115,8 +121,17 @@ func (a *App) ListThreads() ([]store.Thread, error) {
 	if remote, err := a.client.ListInferenceThreads(a.ctx, spaceID); err == nil {
 		threads := make([]store.Thread, 0, len(remote))
 		for _, item := range remote {
+			// runInferenceTranscript uses a local conversation id in the UI and a
+			// different Notion thread id on the wire. Merge the remote row back
+			// into its local conversation; otherwise the sidebar gets a duplicate
+			// empty chat that has no messages in SQLite.
+			id := item.ID
+			if localID, lookupErr := a.db.ConversationForRemoteThread(spaceID, item.ID); lookupErr == nil && localID != "" {
+				id = localID
+				_ = a.db.DeleteThreadIfEmpty(item.ID)
+			}
 			threads = append(threads, store.Thread{
-				ID: item.ID, Title: item.Title, SpaceID: item.SpaceID,
+				ID: id, Title: item.Title, SpaceID: item.SpaceID,
 				CreatedAt: item.CreatedAt, UpdatedAt: item.UpdatedAt,
 			})
 		}

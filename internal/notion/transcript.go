@@ -201,7 +201,7 @@ func (a *Accumulator) project() []part {
 			toolSteps[id] = struct{}{}
 			name, _ := stringField(step, "toolName", "name", "toolType")
 			server, _ := stringField(step, "moduleName", "serverName", "integrationName")
-			args, _ := step["input"].(map[string]interface{})
+			args := extractToolArgs(step)
 			parts = append(parts, part{kind: "tool_use", id: id, name: name, server: server, args: args})
 		case "agent-inference":
 			// `value` — это массив частей (text/thinking/tool_use).
@@ -230,10 +230,7 @@ func (a *Accumulator) project() []part {
 					}
 					name, _ := stringField(p, "name", "toolName")
 					server, _ := stringField(p, "serverName", "integrationName", "moduleName")
-					args, _ := p["input"].(map[string]interface{})
-					if args == nil {
-						args, _ = p["arguments"].(map[string]interface{})
-					}
+					args := extractToolArgs(p)
 					parts = append(parts, part{kind: "tool_use", id: id, name: name, server: server, args: args})
 				}
 			}
@@ -255,6 +252,55 @@ func (a *Accumulator) project() []part {
 // inferenceParts принимает и массив частей (актуальный формат Notion),
 // и объект с полем "parts" (старый формат) — чтобы стрим не ломался
 // при очередном изменении схемы на стороне Notion.
+// extractToolArgs поддерживает все замеченные формы Notion: input/arguments/args,
+// JSON-строку и вложенную обёртку value. Без этого карточка показывала только
+// Response, хотя в веб-клиенте Notion Input был заполнен.
+func extractToolArgs(node map[string]interface{}) map[string]interface{} {
+	return extractToolArgsDepth(node, 0)
+}
+
+func extractToolArgsDepth(node map[string]interface{}, depth int) map[string]interface{} {
+	if depth > 5 {
+		return nil
+	}
+	for _, key := range []string{"input", "arguments", "args", "toolInput", "toolArguments"} {
+		value, ok := node[key]
+		if !ok || value == nil {
+			continue
+		}
+		if args, ok := value.(map[string]interface{}); ok {
+			if nested, ok := args["value"].(map[string]interface{}); ok && len(args) == 1 {
+				return nested
+			}
+			return args
+		}
+		if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
+			var args map[string]interface{}
+			if json.Unmarshal([]byte(text), &args) == nil {
+				return args
+			}
+		}
+	}
+	// Некоторые версии стрима кладут вызов глубже: value.toolUse.input.
+	for _, key := range []string{"value", "toolUse", "toolCall", "request", "call", "data", "content"} {
+		switch nested := node[key].(type) {
+		case map[string]interface{}:
+			if args := extractToolArgsDepth(nested, depth+1); args != nil {
+				return args
+			}
+		case []interface{}:
+			for _, item := range nested {
+				if child, ok := item.(map[string]interface{}); ok {
+					if args := extractToolArgsDepth(child, depth+1); args != nil {
+						return args
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func inferenceParts(value interface{}) []interface{} {
 	switch typed := value.(type) {
 	case []interface{}:

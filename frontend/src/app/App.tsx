@@ -77,6 +77,14 @@ function parseParts(raw: string | undefined, content: string): Part[] {
 	return content ? [{ kind: "text", text: content }] : []
 }
 
+type RevealState = {
+	queue: string
+	raf: number
+	lastFrame: number
+	charsPerMs: number
+	carry: number
+}
+
 export default function App() {
 	const [settings, setSettings] = useState<Settings>(DEFAULTS)
 	const [connection, setConnection] = useState<ConnectionState | null>(null)
@@ -85,7 +93,10 @@ export default function App() {
 	const [threadId, setThreadId] = useState("")
 	const [turns, setTurns] = useState<Turn[]>([])
 	const [input, setInput] = useState("")
-	const [busy, setBusy] = useState(false)
+	// Запросы отслеживаются по чатам: можно открыть новый чат и писать в нём,
+	// пока предыдущий продолжает работать в фоне.
+	const [runningThreads, setRunningThreads] = useState<Set<string>>(() => new Set())
+	const runningThreadsRef = useRef(new Set<string>())
 	const [showSettings, setShowSettings] = useState(false)
 	const [sidebarOpen, setSidebarOpen] = useState(true)
 	// Ширина сайдбара тянется мышью и запоминается между запусками.
@@ -115,18 +126,29 @@ export default function App() {
 	}, [sidebarWidth])
 
 	const scroller = useRef<HTMLDivElement>(null)
-	const assistantId = useRef("")
-	const streamThreadId = useRef("")
+	const assistantIds = useRef(new Map<string, string>())
 	const threadIdRef = useRef("")
 	const turnsRef = useRef<Turn[]>([])
 	const threadCache = useRef(new Map<string, Turn[]>())
 	const openSequence = useRef(0)
+	// Входящие NDJSON-дельты могут быть огромными. Держим отдельную очередь на
+	// каждый параллельный чат и проявляем её короткими порциями, а не вставляем
+	// в DOM одним блоком.
+	const revealStates = useRef(new Map<string, RevealState>())
+	const streamStartedAt = useRef(new Map<string, number>())
 	// The chat used to read a stale `connection` snapshot, which is why sending
 	// right after a cURL import still said "нет сессии".
 	const connectedRef = useRef(false)
 
 	useEffect(() => { threadIdRef.current = threadId }, [threadId])
 	useEffect(() => { turnsRef.current = turns }, [turns])
+	const markRunning = useCallback((id: string, running: boolean) => {
+		const next = new Set(runningThreadsRef.current)
+		if (running) next.add(id)
+		else next.delete(id)
+		runningThreadsRef.current = next
+		setRunningThreads(next)
+	}, [])
 
 	const updateThreadTurns = useCallback((targetThreadId: string, update: (current: Turn[]) => Turn[]) => {
 		const current = threadCache.current.get(targetThreadId) ?? (threadIdRef.current === targetThreadId ? turnsRef.current : [])
@@ -185,16 +207,13 @@ export default function App() {
 	}, [])
 
 	// ---- плавный вывод текста ------------------------------------------
-	// Показываем API chunks целиком. Прозрачный хвост и blur-анимация находятся
-	// в CSS; посимвольного typewriter больше нет.
-
-	const appendText = useCallback((chunk: string) => {
-		if (!chunk) return
-		const targetThreadId = streamThreadId.current
-		if (!targetThreadId) return
+	const appendVisibleText = useCallback((targetThreadId: string, chunk: string) => {
+		if (!chunk || !targetThreadId) return
+		const assistantId = assistantIds.current.get(targetThreadId)
+		if (!assistantId) return
 		updateThreadTurns(targetThreadId, (prev) => {
 			const next = [...prev]
-			const idx = next.findIndex((t) => t.id === assistantId.current)
+			const idx = next.findIndex((t) => t.id === assistantId)
 			if (idx < 0) return prev
 			const turn = { ...next[idx], parts: [...next[idx].parts] }
 			const i = turn.parts.length - 1
@@ -209,60 +228,81 @@ export default function App() {
 		})
 	}, [updateThreadTurns])
 
-	const textQueue = useRef("")
-	const textTimer = useRef<number | null>(null)
-	const lastChunkAt = useRef(0)
-	const requestStartedAt = useRef(0)
-	const expectedChunkGap = useRef(800)
-	const drainDeadline = useRef(0)
-	const pumpText = useCallback(() => {
-		if (!textQueue.current) { textTimer.current = null; return }
-		const now = performance.now()
-		const remainingMs = Math.max(48, drainDeadline.current - now)
-		// Растягиваем накопленный блок примерно до ожидаемого прихода следующего.
-		// Скорость автоматически адаптируется к реальным интервалам API.
-		let cut = Math.ceil(textQueue.current.length * 32 / remainingMs)
-		// Не печатаем по одной букве: короткие порции выглядят как естественное
-		// появление текста, а не typewriter.
-		cut = Math.max(Math.min(3, textQueue.current.length), Math.min(48, cut, textQueue.current.length))
-		if (cut > 10) {
-			const boundary = textQueue.current.lastIndexOf(" ", cut)
-			if (boundary > 6) cut = boundary + 1
+	const appendText = useCallback((targetThreadId: string, chunk: string) => {
+		if (!chunk || !targetThreadId) return
+		let state = revealStates.current.get(targetThreadId)
+		if (!state) {
+			// Первый крупный блок проявляется примерно за 0.9–1.5 секунды. Если
+			// модель долго думала до первой дельты, используем это время как темп,
+			// но ограничиваем его, чтобы ответ не тянулся бесконечно.
+			const waited = Date.now() - (streamStartedAt.current.get(targetThreadId) ?? Date.now())
+			const targetMs = Math.min(1500, Math.max(900, waited || 1200))
+			state = {
+				queue: "",
+				raf: 0,
+				lastFrame: performance.now(),
+				charsPerMs: Math.min(1.2, Math.max(0.08, chunk.length / targetMs)),
+				carry: 0,
+			}
+			revealStates.current.set(targetThreadId, state)
 		}
-		const piece = textQueue.current.slice(0, cut)
-		textQueue.current = textQueue.current.slice(cut)
-		appendText(piece)
-		textTimer.current = window.setTimeout(pumpText, 32)
-	}, [appendText])
-	const enqueueText = useCallback((chunk: string) => {
-		if (!chunk) return
-		const now = performance.now()
-		if (lastChunkAt.current > 0) {
-			const measured = Math.max(140, Math.min(2200, now - lastChunkAt.current))
-			expectedChunkGap.current = expectedChunkGap.current * 0.62 + measured * 0.38
-		} else if (requestStartedAt.current > 0) {
-			// Первый блок задаёт стартовый темп: чем дольше модель думала до него,
-			// тем спокойнее раскрываем большой первый chunk. Дальше темп уточняется
-			// реальными интервалами между блоками.
-			const firstLatency = now - requestStartedAt.current
-			expectedChunkGap.current = Math.max(320, Math.min(1500, firstLatency * 0.42))
+		state.queue += chunk
+		if (state.raf) return
+
+		const tick = (now: number) => {
+			const current = revealStates.current.get(targetThreadId)
+			if (!current) return
+			const elapsed = Math.min(80, now - current.lastFrame)
+			// 30 FPS достаточно для мягкого проявления и не заставляет Markdown
+			// полностью переразбираться на каждом кадре монитора.
+			if (elapsed < 28) {
+				current.raf = requestAnimationFrame(tick)
+				return
+			}
+			current.lastFrame = now
+			const backlogBoost = Math.min(3, 1 + current.queue.length / 1800)
+			const budget = current.carry + elapsed * current.charsPerMs * backlogBoost
+			let take = Math.floor(budget)
+			current.carry = budget - take
+			if (take > 0 && current.queue) {
+				take = Math.min(current.queue.length, Math.max(1, take))
+				// Не режем surrogate pair посередине.
+				if (take < current.queue.length && /[\uD800-\uDBFF]/.test(current.queue[take - 1])) take++
+				const visible = current.queue.slice(0, take)
+				current.queue = current.queue.slice(take)
+				appendVisibleText(targetThreadId, visible)
+			}
+			if (current.queue) current.raf = requestAnimationFrame(tick)
+			else current.raf = 0
 		}
-		lastChunkAt.current = now
-		textQueue.current += chunk
-		drainDeadline.current = now + Math.max(260, expectedChunkGap.current * 1.08)
-		if (textTimer.current === null) textTimer.current = window.setTimeout(pumpText, 48)
-	}, [pumpText])
-	const flushText = useCallback(() => {
-		if (textTimer.current !== null) window.clearTimeout(textTimer.current)
-		textTimer.current = null
-		if (textQueue.current) { const rest = textQueue.current; textQueue.current = ""; appendText(rest) }
-	}, [appendText])
+		state.raf = requestAnimationFrame(tick)
+	}, [appendVisibleText])
+
+	async function waitForReveal(targetThreadId: string) {
+		const deadline = Date.now() + 12_000
+		while (Date.now() < deadline) {
+			const state = revealStates.current.get(targetThreadId)
+			if (!state || (!state.queue && !state.raf)) return
+			await new Promise((resolve) => window.setTimeout(resolve, 32))
+		}
+		// Защитный предел для аномально огромного ответа: ничего не теряем.
+		const state = revealStates.current.get(targetThreadId)
+		if (state?.queue) {
+			appendVisibleText(targetThreadId, state.queue)
+			state.queue = ""
+		}
+	}
+
+	useEffect(() => () => {
+		for (const state of revealStates.current.values()) if (state.raf) cancelAnimationFrame(state.raf)
+		revealStates.current.clear()
+	}, [])
 
 	// ---- streaming events ------------------------------------------------
 	const applyEvent = useCallback(
 		(ev: ChatEvent) => {
 			if (ev.type === "thread-title" && ev.title) {
-				const target = ev.threadId || streamThreadId.current
+				const target = ev.threadId
 				const title = cleanThreadTitle(ev.title)
 				if (target && title) {
 					setThreads((prev) => prev.map((t) => t.id === target ? { ...t, title } : t))
@@ -272,20 +312,19 @@ export default function App() {
 			}
 			if (ev.type === "error") {
 				notify(ev.message || "Ошибка запроса", true)
-				return
 			}
 
-			if (ev.type === "text-delta") {
-				enqueueText(ev.delta ?? "")
-				return
-			}
-			flushText()
-
-			const targetThreadId = streamThreadId.current
+			const targetThreadId = ev.threadId
 			if (!targetThreadId) return
+			if (ev.type === "text-delta") {
+				appendText(targetThreadId, ev.delta ?? "")
+				return
+			}
 			updateThreadTurns(targetThreadId, (prev) => {
 				const next = [...prev]
-				const idx = next.findIndex((t) => t.id === assistantId.current)
+				const assistantId = assistantIds.current.get(targetThreadId)
+				if (!assistantId) return prev
+				const idx = next.findIndex((t) => t.id === assistantId)
 				if (idx < 0) return prev
 				const turn = { ...next[idx], parts: [...next[idx].parts] }
 
@@ -339,11 +378,14 @@ export default function App() {
 						break
 					}
 					case "transcript-reset": {
+						const reveal = revealStates.current.get(targetThreadId)
+						if (reveal) reveal.queue = ""
 						turn.parts = []
 						break
 					}
 					case "done": {
-						turn.streaming = false
+						// send() снимет streaming только после того, как очередь плавного
+						// проявления полностью дошла до UI.
 						break
 					}
 				}
@@ -352,7 +394,7 @@ export default function App() {
 				return next
 			})
 		},
-		[notify, enqueueText, flushText, updateThreadTurns],
+		[notify, appendText, updateThreadTurns],
 	)
 
 	useEffect(() => onChatEvent(applyEvent), [applyEvent])
@@ -498,7 +540,9 @@ export default function App() {
 	// override нужен для ответов из опросника: текст приходит не из инпута.
 	async function send(files: Attachment[] = [], override?: string) {
 		let text = (override ?? input).trim()
-		if ((!text && files.length === 0) || busy) return
+		if (!text && files.length === 0) return
+		// Блокируем только повторную отправку в ЭТОТ чат. Другие чаты свободны.
+		if (threadId && runningThreadsRef.current.has(threadId)) return
 
 		// Re-check with the backend instead of trusting stale local state.
 		let live = connection
@@ -517,11 +561,14 @@ export default function App() {
 		}
 
 		let tid = threadId
+		let assistantTurnId = ""
 		try {
 			if (!tid) {
 				const title = text.slice(0, 60) || files[0]?.name || "Новый чат"
 				const t = await api.createThread(title)
 				tid = t.id
+				threadIdRef.current = tid
+				turnsRef.current = []
 				setThreadId(tid)
 				setThreads((prev) => [t, ...prev])
 			}
@@ -530,7 +577,7 @@ export default function App() {
 			// вложения в том же transcript.
 			let attachments: UploadedAttachment[] = []
 			if (files.length > 0) {
-				setBusy(true)
+				markRunning(tid, true)
 				const result = await uploadFiles(tid, files)
 				attachments = result.uploaded
 				text = withAttachments(text, result.fallback)
@@ -553,18 +600,10 @@ export default function App() {
 				parts: [{ kind: "text", text }],
 				createdAt: now,
 			}
-			assistantId.current = `a-${now}`
-			streamThreadId.current = tid
-			// Новый ответ не должен наследовать скорость/хвост прошлого стрима.
-			if (textTimer.current !== null) window.clearTimeout(textTimer.current)
-			textTimer.current = null
-			textQueue.current = ""
-			lastChunkAt.current = 0
-			expectedChunkGap.current = 800
-			drainDeadline.current = 0
-			requestStartedAt.current = performance.now()
+			assistantTurnId = `a-${now}-${Math.random().toString(36).slice(2, 8)}`
+			assistantIds.current.set(tid, assistantTurnId)
 			const aTurn: Turn = {
-				id: assistantId.current,
+				id: assistantTurnId,
 				role: "assistant",
 				content: "",
 				parts: [],
@@ -573,18 +612,19 @@ export default function App() {
 			}
 			// История теперь включает и ответы ассистента — без этого модель
 			// теряла контекст предыдущих шагов в диалоге.
-			const history = turns
+			const history = (threadCache.current.get(tid) ?? turns)
 				.filter((t) => t.content.trim() !== "")
 				.map((t) => ({ id: t.id, role: t.role, content: t.content }))
 
 			updateThreadTurns(tid, (prev) => [...prev, userTurn, aTurn])
 			setInput("")
 			setAtBottom(true)
-			setBusy(true)
+			markRunning(tid, true)
 
-			// Сохраняем реплику сразу: раньше сообщения не писались в базу
-			// вообще, поэтому при переходе между чатами переписка исчезала.
-			void persistTurn(tid, userTurn)
+			// Сохраняем реплику ДО запуска сети. Так даже быстрый переход в другой
+			// чат не успеет открыть пустой кэш раньше записи в SQLite.
+			await persistTurn(tid, userTurn)
+			streamStartedAt.current.set(tid, Date.now())
 
 			await api.sendMessage({
 				threadId: tid,
@@ -598,14 +638,16 @@ export default function App() {
 		} catch (e) {
 			notify(errText(e), true)
 		} finally {
-			setBusy(false)
-			flushText()
+			await waitForReveal(tid)
+			markRunning(tid, false)
 			const completed = updateThreadTurns(tid, (prev) => prev.map((t) =>
-				t.id === assistantId.current ? { ...t, streaming: false } : t,
+				t.id === assistantTurnId ? { ...t, streaming: false } : t,
 			))
-			const done = completed.find((t) => t.id === assistantId.current)
+			const done = completed.find((t) => t.id === assistantTurnId)
 			if (done) void persistTurn(tid, done)
-			streamThreadId.current = ""
+			assistantIds.current.delete(tid)
+			streamStartedAt.current.delete(tid)
+			revealStates.current.delete(tid)
 			api.listThreads()
 				.then((l) => setThreads(l ?? []))
 				.catch(() => {})
@@ -762,7 +804,7 @@ export default function App() {
 						onChange={setInput}
 						onSend={(files) => void send(files)}
 						onStop={() => void api.stopInference(threadId).catch(() => {})}
-						busy={busy}
+						busy={runningThreads.has(threadId)}
 						settings={settings}
 						models={models}
 						onPatchSettings={patchSettings}

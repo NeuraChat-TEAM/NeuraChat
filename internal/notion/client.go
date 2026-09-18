@@ -112,7 +112,18 @@ func (c *Client) Post(ctx context.Context, path string, body interface{}) (*http
 	}
 	req.Header.Set("content-type", "application/json")
 
-	resp, err := c.http.Do(req)
+	// runInferenceTranscript — долгоживущий NDJSON-поток. Общий Client.Timeout
+	// включает не только подключение, но и ЧТЕНИЕ ВСЕГО body, поэтому ровно через
+	// requestTimeout приложение обрывало ответ с «context deadline exceeded»,
+	// хотя Notion продолжал генерацию. Для стрима отключаем общий дедлайн;
+	// остановка по кнопке и закрытие приложения всё равно отменяют req.Context().
+	httpClient := c.http
+	if path == inferencePath {
+		streamClient := *c.http
+		streamClient.Timeout = 0
+		httpClient = &streamClient
+	}
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		c.finishDebug(entry, err)
 		return nil, nil, err

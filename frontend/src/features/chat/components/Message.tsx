@@ -7,15 +7,19 @@ const expandedThoughts = new Set<string>()
 const expandedGroups = new Set<string>()
 const animatedSteps = new Set<string>()
 import {
+	CheckCircle2,
 	ChevronRight,
+	Circle,
 	Copy,
 	FileArchive,
 	FileCode2,
 	FileText,
+	Loader2,
 	PencilLine,
 	Plus,
 	ThumbsDown,
 	ThumbsUp,
+	XCircle,
 } from "lucide-react"
 import { ASSISTANT_FACE } from "../../navigation/components/TitleBar"
 import type { Part, ToolPart, Turn } from "../../../shared/model/types"
@@ -137,8 +141,10 @@ function ToolCard({
 				<span className="bg-accent grid size-4 place-items-center rounded-[0.25em] text-[10px] lowercase">
 					{identity.mark}
 				</span>
-				<span className={cn("min-w-0 truncate font-medium", !part.done && "shimmer")}>{identity.action}</span>
-				<span className="text-muted-foreground hidden text-xs sm:inline">· {identity.source}</span>
+				<span className={cn("min-w-0 truncate font-medium", !part.done && "shimmer")}>
+					{identity.source} / {identity.name}
+				</span>
+				<span className="text-muted-foreground hidden truncate text-xs sm:inline">· {identity.action}</span>
 				{!part.done ? (
 					<span className="tool-status" title="подключается…" aria-label="подключается">
 						<span className="tool-status__ring" />
@@ -239,6 +245,41 @@ function ToolCard({
 			) : null}
 		</div>
 	)
+}
+
+type TodoItem = { id?: string; text: string; status?: "pending" | "in_progress" | "done" | "failed" }
+
+function todosFromParts(parts: Part[]): TodoItem[] {
+	let latest: TodoItem[] = []
+	for (const part of parts) {
+		if (part.kind !== "tool" || !/update[_-]?todos/i.test(toolIdentity(part).name)) continue
+		for (const candidate of [part.result, part.args, parseToolResult(part.result).text]) {
+			let value: unknown = candidate
+			if (typeof value === "string") { try { value = JSON.parse(value) } catch { continue } }
+			if (!value || typeof value !== "object" || Array.isArray(value)) continue
+			const list = (value as { todos?: unknown }).todos
+			if (!Array.isArray(list)) continue
+			const parsed = list.flatMap((item): TodoItem[] => {
+				if (!item || typeof item !== "object") return []
+				const row = item as Record<string, unknown>
+				if (typeof row.text !== "string" || !row.text.trim()) return []
+				return [{ id: typeof row.id === "string" ? row.id : undefined, text: row.text, status: typeof row.status === "string" ? row.status as TodoItem["status"] : "pending" }]
+			})
+			if (parsed.length) latest = parsed
+		}
+	}
+	return latest
+}
+
+function TodoArtifact({ todos }: { todos: TodoItem[] }) {
+	const done = todos.filter(todo => todo.status === "done").length
+	return <div className="bg-card mt-2 rounded-xl border p-3 shadow-xs">
+		<div className="mb-2 flex items-center gap-2"><CheckCircle2 className="text-brand size-4" /><span className="text-sm font-semibold">План работы</span><Badge className="ml-auto" tone={done === todos.length ? "ok" : "muted"}>{done}/{todos.length}</Badge></div>
+		<div className="space-y-1.5">{todos.map((todo, index) => {
+			const Icon = todo.status === "done" ? CheckCircle2 : todo.status === "in_progress" ? Loader2 : todo.status === "failed" ? XCircle : Circle
+			return <div key={todo.id || `${index}:${todo.text}`} className="flex items-start gap-2 text-[13px] leading-5"><Icon className={cn("mt-0.5 size-3.5 shrink-0", todo.status === "done" && "text-emerald-500", todo.status === "in_progress" && "text-brand animate-spin", todo.status === "failed" && "text-destructive", todo.status === "pending" && "text-muted-foreground")} /><span className={cn(todo.status === "done" && "text-muted-foreground line-through")}>{todo.text}</span></div>
+		})}</div>
+	</div>
 }
 
 function Thought({ id, text }: { id: string; text: string }) {
@@ -345,6 +386,7 @@ export function AssistantMessage({
 	}, [turn.parts])
 	const toolSurveys = useMemo(() => surveysFromTools(turn.parts), [turn.parts])
 	const allSurveys = [...surveys, ...toolSurveys]
+	const todos = useMemo(() => todosFromParts(turn.parts), [turn.parts])
 	const [open, setOpenState] = useState(() => expandedGroups.has(turn.id))
 	const setOpen = (next: boolean) => {
 		setOpenState(next)
@@ -477,6 +519,9 @@ export function AssistantMessage({
 					</Button>
 				</div>
 			) : null}
+
+			{/* Последнее состояние update-todos всегда в самом конце сообщения. */}
+			{todos.length > 0 ? <TodoArtifact todos={todos} /> : null}
 		</div>
 	)
 }

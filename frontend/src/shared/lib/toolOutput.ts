@@ -151,7 +151,15 @@ export function summarizeToolArgs(args: Record<string, unknown>): Array<{ key: s
 		const label = ARG_LABELS[key] || key.replace(/([a-z])([A-Z])/g, "$1 $2")
 		if (Array.isArray(value)) {
 			const paths = compactPaths(value)
-			return { key: label, summary: paths.length ? "" : `${value.length} элементов`, values: paths.length ? paths : undefined }
+			if (paths.length) return { key: label, summary: "", values: paths }
+			// Массивы объектов (например edits у fs_patch_file) раньше схлопывались
+			// до «1 элементов», поэтому фактический Input был не виден.
+			const values = value.map((item, index) => {
+				const clean = sanitize(item)
+				const rendered = typeof clean === "string" ? clean : JSON.stringify(clean, null, 2)
+				return `[${index}]\n${rendered.length > 4000 ? `${rendered.slice(0, 4000)}…` : rendered}`
+			})
+			return { key: label, summary: `${value.length} элементов`, values }
 		}
 		if (typeof value === "string") return { key: label, summary: value.length > 320 ? `${value.slice(0, 317)}…` : value }
 		if (typeof value === "object" && value) {

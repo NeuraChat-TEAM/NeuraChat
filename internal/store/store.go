@@ -254,3 +254,28 @@ func (s *Store) GetKV(key string) (string, error) {
 	}
 	return value, err
 }
+
+// ConversationForRemoteThread resolves a Notion thread id back to the local
+// conversation id used by the UI. Without this merge the remote sync inserted
+// a second, empty sidebar row and opening it looked like the history vanished.
+func (s *Store) ConversationForRemoteThread(spaceID, remoteThreadID string) (string, error) {
+	prefix := "thread:" + spaceID + ":"
+	var conversationID string
+	err := s.db.QueryRow(
+		`SELECT substr(k, ?) FROM kv WHERE k LIKE ? AND v=? LIMIT 1`,
+		len(prefix)+1, prefix+"%", remoteThreadID,
+	).Scan(&conversationID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return conversationID, err
+}
+
+// DeleteThreadIfEmpty removes a duplicate remote-only sidebar row while never
+// touching a thread that already has locally persisted messages.
+func (s *Store) DeleteThreadIfEmpty(id string) error {
+	_, err := s.db.Exec(`DELETE FROM threads WHERE id=? AND NOT EXISTS (
+		SELECT 1 FROM messages WHERE thread_id=threads.id
+	)`, id)
+	return err
+}
