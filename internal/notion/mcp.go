@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -118,16 +120,76 @@ type ConnectMcpInput struct {
 	ServerURL string `json:"serverUrl"`
 	Token     string `json:"token"`
 	AutoWrite bool   `json:"runWriteToolsAutomatically"`
+
+	// Headers — дополнительные заголовки авторизации (X-API-Key и прочее).
+	// Query — параметры строки запроса. Smithery и подобные хостинги
+	// не читают Authorization, а ждут ?api_key=...&profile=... и без них
+	// сразу отвечают отказом — именно это и было в ошибке browserbase.
+	Headers map[string]string `json:"headers,omitempty"`
+	Query   map[string]string `json:"query,omitempty"`
+
+	// AutoRun — сразу разрешить все инструменты (run automatically).
+	AutoRun bool `json:"autoRun,omitempty"`
+}
+
+// applyQuery доклеивает параметры авторизации к адресу сервера.
+func applyQuery(serverURL string, query map[string]string) string {
+	serverURL = strings.TrimSpace(serverURL)
+	if len(query) == 0 || serverURL == "" {
+		return serverURL
+	}
+	parsed, err := url.Parse(serverURL)
+	if err != nil {
+		return serverURL
+	}
+	values := parsed.Query()
+	for key, value := range query {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key == "" || value == "" {
+			continue
+		}
+		values.Set(key, value)
+	}
+	parsed.RawQuery = values.Encode()
+	return parsed.String()
+}
+
+// authHeadersFor собирает Authorization и произвольные заголовки в один список.
+// Порядок стабилен, иначе Notion при повторном подключении видит другой набор.
+func (c *Client) authHeadersFor(token string, headers map[string]string) []interface{} {
+	out := []interface{}{}
+	if value := strings.TrimSpace(token); value != "" {
+		out = append(out, map[string]interface{}{
+			"name":  "Authorization",
+			"value": "Bearer " + value,
+		})
+	}
+	names := make([]string, 0, len(headers))
+	for name := range headers {
+		if strings.TrimSpace(name) != "" {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		value := strings.TrimSpace(headers[name])
+		if value == "" {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(name), "authorization") && strings.TrimSpace(token) != "" {
+			continue // уже добавлен из токена
+		}
+		out = append(out, map[string]interface{}{
+			"name":  strings.TrimSpace(name),
+			"value": value,
+		})
+	}
+	return out
 }
 
 func (c *Client) authHeaders(token string) []interface{} {
-	if strings.TrimSpace(token) == "" {
-		return []interface{}{}
-	}
-	return []interface{}{map[string]interface{}{
-		"name":  "Authorization",
-		"value": "Bearer " + strings.TrimSpace(token),
-	}}
+	return c.authHeadersFor(token, nil)
 }
 
 // CheckMcpOAuth спрашивает Notion, требует ли сервер OAuth. Для notcode с
@@ -139,6 +201,12 @@ func (c *Client) CheckMcpOAuth(ctx context.Context, serverURL string) (map[strin
 // ValidateMcp просит Notion самому дойти до сервера и перечислить инструменты.
 // Это первый шаг веб-клиента и лучший источник понятной ошибки.
 func (c *Client) ValidateMcp(ctx context.Context, serverURL, token string) ([]McpTool, string, error) {
+	return c.ValidateMcpWith(ctx, serverURL, token, nil)
+}
+
+// ValidateMcpWith — та же проверка, но с произвольными заголовками (X-API-Key
+// и прочее). Smithery/Context7 без них отвечают отказом.
+func (c *Client) ValidateMcpWith(ctx context.Context, serverURL, token string, headers map[string]string) ([]McpTool, string, error) {
 	cfg, err := c.require()
 	if err != nil {
 		return nil, "", err
@@ -146,7 +214,7 @@ func (c *Client) ValidateMcp(ctx context.Context, serverURL, token string) ([]Mc
 	out, err := c.PostJSON(ctx, c.mcpPath("validate", pathValidate), map[string]interface{}{
 		"serverUrl":         serverURL,
 		"spaceId":           cfg.SpaceID,
-		"authHeaders":       c.authHeaders(token),
+		"authHeaders":       c.authHeadersFor(token, headers),
 		"initiationContext": "connect",
 	})
 	if err != nil {
@@ -207,6 +275,9 @@ func (c *Client) ConnectMcp(ctx context.Context, in ConnectMcpInput) (*McpModule
 	if serverURL == "" {
 		return nil, errors.New("не указан адрес MCP-сервера")
 	}
+	// Параметры строки запроса вшиваем в адрес: Notion не умеет их передавать
+	// отдельно, а Smithery без api_key/profile сразу отвечает отказом.
+	serverURL = applyQuery(serverURL, in.Query)
 	name := strings.TrimSpace(in.Name)
 	if name == "" {
 		name = "notcode"
@@ -219,7 +290,7 @@ func (c *Client) ConnectMcp(ctx context.Context, in ConnectMcpInput) (*McpModule
 	}
 
 	// 2. Проверка: Notion сам стучится на сервер и получает список тулзов.
-	tools, official, err := c.ValidateMcp(ctx, serverURL, in.Token)
+	tools, official, err := c.ValidateMcpWith(ctx, serverURL, in.Token, in.Headers)
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +302,7 @@ func (c *Client) ConnectMcp(ctx context.Context, in ConnectMcpInput) (*McpModule
 	created, err := c.PostJSON(ctx, c.mcpPath("connect", pathConnect), map[string]interface{}{
 		"integrationId":     integrationID,
 		"spaceId":           cfg.SpaceID,
-		"authHeaders":       c.authHeaders(in.Token),
+		"authHeaders":       c.authHeadersFor(in.Token, in.Headers),
 		"moduleDefinition":  moduleDefinition,
 		"initiationContext": "connect",
 	})
@@ -264,7 +335,7 @@ func (c *Client) ConnectMcp(ctx context.Context, in ConnectMcpInput) (*McpModule
 	// 4. HAR после connect добавляет pointer workflow_module в
 	// space_view.settings.agent_chat_modules через saveTransactionsFanout.
 	// Без этого модуль установлен, но не появляется в текущем AI-чате.
-	if err := c.addAgentChatModule(ctx, cfg.SpaceViewID, integrationID); err != nil {
+	if err := c.addAgentChatModuleWith(ctx, cfg.SpaceViewID, integrationID, in.AutoRun, toolNames(tools)); err != nil {
 		module.Enabled = false
 		return module, fmt.Errorf("MCP зарегистрирован, но не добавлен в текущий чат: %w", err)
 	}
@@ -375,7 +446,24 @@ func (c *Client) writeSpaceViewSettings(ctx context.Context, spaceViewID string,
 	return err
 }
 
+// toolNames — плоский список имён инструментов для разрешения автозапуска.
+func toolNames(tools []McpTool) []string {
+	out := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		if name := strings.TrimSpace(tool.Name); name != "" {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
 func (c *Client) addAgentChatModule(ctx context.Context, spaceViewID, moduleID string) error {
+	return c.addAgentChatModuleWith(ctx, spaceViewID, moduleID, false, nil)
+}
+
+// addAgentChatModuleWith добавляет модуль в чат и, если нужно, сразу разрешает
+// все его инструменты (аналог «run automatically» в веб-клиенте).
+func (c *Client) addAgentChatModuleWith(ctx context.Context, spaceViewID, moduleID string, autoRun bool, tools []string) error {
 	cfg, err := c.require()
 	if err != nil {
 		return err
@@ -397,12 +485,24 @@ func (c *Client) addAgentChatModule(ctx context.Context, spaceViewID, moduleID s
 			kept = append(kept, entry)
 		}
 	}
-	kept = append(kept, map[string]interface{}{
+	entry := map[string]interface{}{
 		"pointer": map[string]interface{}{
 			"table": "workflow_module", "id": moduleID, "spaceId": cfg.SpaceID,
 		},
 		"defaultEnabled": true,
-	})
+	}
+	if autoRun {
+		// Разрешаем выполнять инструменты без ручного подтверждения.
+		entry["runWriteToolsAutomatically"] = true
+		if len(tools) > 0 {
+			allowed := make([]interface{}, 0, len(tools))
+			for _, name := range tools {
+				allowed = append(allowed, name)
+			}
+			entry["allowedTools"] = allowed
+		}
+	}
+	kept = append(kept, entry)
 	settings["agent_chat_modules"] = kept
 	return c.writeSpaceViewSettings(ctx, spaceViewID, settings, "agentPersistenceHelpers.addAgentChatModule")
 }

@@ -266,6 +266,15 @@ export default function App() {
 			current.carry = budget - take
 			if (take > 0 && current.queue) {
 				take = Math.min(current.queue.length, Math.max(1, take))
+				// Проявляем целыми словами, а не побуквенно: дотягиваемся до
+				// ближайшей границы слова/строки, иначе выглядит как typewriter.
+				if (take < current.queue.length) {
+					const limit = Math.min(current.queue.length, take + 24)
+					let boundary = take
+					while (boundary < limit && !/[\s.,;:!?)\]}—–"'`]/.test(current.queue[boundary])) boundary++
+					while (boundary < current.queue.length && /\s/.test(current.queue[boundary])) boundary++
+					take = boundary
+				}
 				// Не режем surrogate pair посередине.
 				if (take < current.queue.length && /[\uD800-\uDBFF]/.test(current.queue[take - 1])) take++
 				const visible = current.queue.slice(0, take)

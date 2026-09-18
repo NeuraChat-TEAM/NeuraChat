@@ -167,7 +167,13 @@ export const api = {
 	mcpConnect: (input: {
 		name: string
 		serverUrl: string
-		authToken?: string
+		token?: string
+		// Smithery и подобные хостинги читают ключ из query (?api_key=…&profile=…),
+		// часть серверов — из произвольных заголовков (X-API-Key и т.п.).
+		headers?: Record<string, string>
+		query?: Record<string, string>
+		// Сразу разрешить инструменты без ручного подтверждения.
+		autoRun?: boolean
 		runWriteToolsAutomatically?: boolean
 	}) => call<McpModule>("McpConnect", input),
 	mcpDisconnect: (integrationId: string) => call<void>("McpDisconnect", integrationId),

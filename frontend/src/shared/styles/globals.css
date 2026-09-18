@@ -164,28 +164,43 @@
 	.answer-reveal {
 		animation: answer-in 520ms cubic-bezier(0.16, 1, 0.3, 1) both;
 	}
+	/* Живой хвост ответа.
+	   Markdown переразбирается на каждой дельте, поэтому любая CSS-анимация
+	   внутри проигрывалась бы заново на каждом блоке текста. Здесь анимаций
+	   нет вообще — есть только геометрическая маска, привязанная к низу
+	   контейнера. Она не перезапускается: при росте текста просто едет вниз. */
 	.answer-reveal--live {
-		/* Более глубокий живой хвост: последние строки не возникают целиком,
-		   а мягко выходят из blur/прозрачности вместе с очередью текста. */
+		--tail: 220px;
 		-webkit-mask-image: linear-gradient(
 			to bottom,
 			#000 0%,
-			#000 calc(100% - 96px),
-			rgba(0, 0, 0, 0.72) calc(100% - 52px),
-			rgba(0, 0, 0, 0.08) 100%
+			#000 calc(100% - var(--tail)),
+			rgba(0, 0, 0, 0.92) calc(100% - var(--tail) * 0.78),
+			rgba(0, 0, 0, 0.72) calc(100% - var(--tail) * 0.58),
+			rgba(0, 0, 0, 0.42) calc(100% - var(--tail) * 0.38),
+			rgba(0, 0, 0, 0.18) calc(100% - var(--tail) * 0.2),
+			rgba(0, 0, 0, 0.04) calc(100% - var(--tail) * 0.08),
+			transparent 100%
 		);
 		mask-image: linear-gradient(
 			to bottom,
 			#000 0%,
-			#000 calc(100% - 96px),
-			rgba(0, 0, 0, 0.72) calc(100% - 52px),
-			rgba(0, 0, 0, 0.08) 100%
+			#000 calc(100% - var(--tail)),
+			rgba(0, 0, 0, 0.92) calc(100% - var(--tail) * 0.78),
+			rgba(0, 0, 0, 0.72) calc(100% - var(--tail) * 0.58),
+			rgba(0, 0, 0, 0.42) calc(100% - var(--tail) * 0.38),
+			rgba(0, 0, 0, 0.18) calc(100% - var(--tail) * 0.2),
+			rgba(0, 0, 0, 0.04) calc(100% - var(--tail) * 0.08),
+			transparent 100%
 		);
-		filter: drop-shadow(0 10px 18px color-mix(in srgb, var(--background) 72%, transparent));
 	}
-	/* Не анимируем последний markdown-блок: innerHTML обновляется на каждой
-	   дельте, поэтому браузер раньше заново проигрывал анимацию всего абзаца. */
-	.answer-reveal--live > * > *:last-child { animation: none; }
+	/* Никаких entrance-анимаций внутри живого ответа: именно они и
+	   переигрывались при каждом новом блоке текста из API. */
+	.answer-reveal--live *,
+	.answer-reveal--live *::before,
+	.answer-reveal--live *::after {
+		animation: none !important;
+	}
 	@keyframes answer-in {
 		from {
 			opacity: 0;

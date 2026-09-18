@@ -9,6 +9,31 @@
 
 import { marked } from "marked"
 import DOMPurify from "dompurify"
+import katex from "katex"
+import "katex/dist/katex.min.css"
+
+/**
+ * Настоящая математика через KaTeX.
+ * При ошибке в формуле (часто во время стрима, когда выражение ещё
+ * не дописано) отдаём исходный текст, а не красную ошибку.
+ */
+export function renderTex(source: string, display: boolean) {
+	const tex = source.trim()
+	if (!tex) return ""
+	try {
+		return katex.renderToString(tex, {
+			displayMode: display,
+			throwOnError: false,
+			errorColor: "currentColor",
+			strict: false,
+			trust: false,
+			output: "html",
+			macros: { "\\RR": "\\mathbb{R}", "\\NN": "\\mathbb{N}", "\\ZZ": "\\mathbb{Z}" },
+		})
+	} catch {
+		return escapeHtml(tex)
+	}
+}
 
 marked.setOptions({ gfm: true, breaks: true })
 
@@ -170,7 +195,7 @@ function inlineTags(text: string) {
 			.replace(
 				/(^|[^$\\])\$([^$\n]+)\$(?!\$)/g,
 				(_all, before: string, body: string) =>
-					`${before}<span class="n-math">${escapeHtml(body)}</span>`,
+					`${before}<span class="n-math">${renderTex(body, false)}</span>`,
 			)
 	)
 }
@@ -179,7 +204,7 @@ function inlineTags(text: string) {
 function displayMath(text: string) {
 	return text.replace(
 		/^\$\$[ \t]*\n([\s\S]*?)\n\$\$[ \t]*$/gm,
-		(_all, body: string) => `<div class="n-math n-math--block">${escapeHtml(body)}</div>`,
+		(_all, body: string) => `<div class="n-math n-math--block">${renderTex(body, true)}</div>`,
 	)
 }
 
@@ -299,7 +324,7 @@ function renderBlock(
 		case "todo":
 			return renderTodo(attrs, inner)
 		case "equation":
-			return `<div class="n-math n-math--block ${color}">${escapeHtml(inner.trim())}</div>`
+			return `<div class="n-math n-math--block ${color}">${renderTex(inner, true)}</div>`
 		case "synced-block":
 		case "synced-block-reference":
 			return (
@@ -383,9 +408,11 @@ export function render(text: string): string {
 
 /** Готовый безопасный HTML для вставки в страницу. */
 export function renderNotionMarkdown(text: string) {
+	// KaTeX отдаёт вложенный MathML и SVG, поэтому оба профиля включены:
+	// без них формулы вырезались санитайзером до голого текста.
 	return DOMPurify.sanitize(render(text), {
 		ADD_TAGS: ["details", "summary", "figure", "figcaption", "video", "audio", "u"],
 		ADD_ATTR: ["controls", "open", "target", "style", "checked", "disabled"],
-		USE_PROFILES: { html: true },
+		USE_PROFILES: { html: true, mathMl: true, svg: true },
 	})
 }

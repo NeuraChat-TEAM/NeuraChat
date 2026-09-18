@@ -27,6 +27,25 @@ type McpServer struct {
 	ServerURL string `json:"serverUrl"`
 	Token     string `json:"token,omitempty"`
 	AutoWrite bool   `json:"runWriteToolsAutomatically"`
+
+	// Transport: "http" (Streamable HTTP / SSE, адрес открыт наружу)
+	// или "stdio" (локальный npm/uvx-пакет, который мы сами запускаем
+	// и проксируем наружу через тот же ngrok-туннель).
+	Transport string `json:"transport,omitempty"`
+
+	// Command/Args/Env — только для stdio: например npx -y @playwright/mcp@latest.
+	Command string            `json:"command,omitempty"`
+	Args    []string          `json:"args,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
+
+	// Headers — произвольные заголовки (X-API-Key и т.п.).
+	// Query — параметры строки запроса: Smithery требует ?api_key=...&profile=...
+	// и без них отвечает отказом ещё до рукопожатия.
+	Headers map[string]string `json:"headers,omitempty"`
+	Query   map[string]string `json:"query,omitempty"`
+
+	// AutoRun — разрешить выполнять инструменты без подтверждения (run automatically).
+	AutoRun bool `json:"autoRun,omitempty"`
 }
 
 // RememberMcpServer добавляет или обновляет запись по имени сервера.
