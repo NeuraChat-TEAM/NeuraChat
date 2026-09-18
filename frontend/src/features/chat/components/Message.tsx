@@ -26,7 +26,7 @@ import type { Part, ToolPart, Turn } from "../../../shared/model/types"
 import type { Artifact, Survey } from "../../artifacts/model/artifacts"
 import { artifactFile, splitArtifacts } from "../../artifacts/model/artifacts"
 import type { ComputerFile } from "../../../shared/lib/toolOutput"
-import { canPreview, fileSize, isImage, parseToolResult, summarizeToolArgs, toolIdentity } from "../../../shared/lib/toolOutput"
+import { canPreview, fileSize, isImage, isSurveyTool, parseToolResult, summarizeToolArgs, toolIdentity } from "../../../shared/lib/toolOutput"
 import { cn, formatTime } from "../../../shared/lib/utils"
 import { ArtifactRow } from "../../artifacts/components/ArtifactCard"
 import SurveyCard from "./SurveyCard"
@@ -365,7 +365,10 @@ export function AssistantMessage({
 	onOpenFile?: (file: ComputerFile) => void
 	onSurveyAnswer?: (answer: string) => void
 }) {
-	const steps = turn.parts.filter((p) => p.kind !== "text") as Exclude<Part, { kind: "text" }>[]
+	// Шаги с опросниками не показываем сырым JSON — ниже будет SurveyCard.
+	const steps = turn.parts.filter(
+		(p) => p.kind !== "text" && !(p.kind === "tool" && isSurveyTool(p)),
+	) as Exclude<Part, { kind: "text" }>[]
 	const raw = turn.parts
 		.filter((p): p is { kind: "text"; text: string } => p.kind === "text")
 		.map((p) => p.text)

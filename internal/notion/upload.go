@@ -367,13 +367,11 @@ func (r *Runtime) FetchAttachment(ctx context.Context, fileURL, fileName string)
 		if err != nil {
 			return out, err
 		}
-		if list, ok := signed["signedUrls"].([]interface{}); ok && len(list) > 0 {
-			if text, ok := list[0].(string); ok {
-				direct = text
-			}
+		if link := firstSignedURL(signed); link != "" {
+			direct = link
 		}
 		if !strings.HasPrefix(direct, "http") {
-			return out, errors.New("Notion не выдал ссылку на файл")
+			return out, fmt.Errorf("Notion не выдал ссылку на файл %s", fileName)
 		}
 	}
 
@@ -395,6 +393,33 @@ func (r *Runtime) FetchAttachment(ctx context.Context, fileURL, fileName string)
 		out.DataBase64 = base64.StdEncoding.EncodeToString(data)
 	}
 	return out, nil
+}
+
+// firstSignedURL достаёт первую http-ссылку из ответа getSignedFileUrls.
+// Notion отдаёт то массив строк, то массив объектов {signedUrl|url},
+// а иногда кладёт его в ключ urls — разбираем все варианты.
+func firstSignedURL(payload map[string]interface{}) string {
+	for _, key := range []string{"signedUrls", "urls", "signedGetUrls"} {
+		list, ok := payload[key].([]interface{})
+		if !ok {
+			continue
+		}
+		for _, item := range list {
+			switch value := item.(type) {
+			case string:
+				if strings.HasPrefix(value, "http") {
+					return value
+				}
+			case map[string]interface{}:
+				for _, field := range []string{"signedUrl", "url", "signedGetUrl"} {
+					if text, _ := value[field].(string); strings.HasPrefix(text, "http") {
+						return text
+					}
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // getBytes — простой GET с cookie-заголовками Notion (для S3 они безвредны).

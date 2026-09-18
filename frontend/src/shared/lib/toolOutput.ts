@@ -212,6 +212,7 @@ function presentedTool(part: { name: string; server?: string; args?: Record<stri
 	else if (/loadpage/.test(normalized)) action = "Открыта страница"
 	else if (/searchusers?/.test(normalized)) action = "Найдены пользователи"
 	else if (/listtools/.test(normalized)) action = "Получен список инструментов"
+	else if (/survey|questionnaire/.test(normalized)) action = done ? "Опросник готов" : "Готовится опросник"
 	return { name, args, action }
 }
 
@@ -223,6 +224,16 @@ export function toolIdentity(part: { name: string; server?: string; args?: Recor
 	if (raw.includes("notion")) return { source: "Notion", mark: "N", ...display }
 	if (raw.includes("system")) return { source: "System", mark: "S", ...display }
 	return { source: part.server || "MCP", mark: "M", ...display }
+}
+
+// Опросники показываем отдельной карточкой SurveyCard, поэтому сырой
+// tool-блок с {questionCount, surveyStepId} показывать не нужно.
+export function isSurveyTool(part: { name: string; server?: string; args?: Record<string, unknown> }) {
+	const display = presentedTool(part)
+	const normalized = display.name.replace(/[./]/g, "_").toLowerCase()
+	if (/survey|questionnaire/.test(normalized)) return true
+	const args = display.args as { questions?: unknown }
+	return Array.isArray(args?.questions) && /ask|survey/i.test(display.name)
 }
 
 export function fileSize(bytes?: number) { if (!bytes || bytes <= 0) return ""; if (bytes < 1024) return `${bytes} Б`; if (bytes < 1048576) return `${Math.round(bytes / 1024)} КБ`; return `${(bytes / 1048576).toFixed(1)} МБ` }

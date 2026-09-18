@@ -491,16 +491,14 @@ func (c *Client) addAgentChatModuleWith(ctx context.Context, spaceViewID, module
 		},
 		"defaultEnabled": true,
 	}
-	if autoRun {
-		// Разрешаем выполнять инструменты без ручного подтверждения.
-		entry["runWriteToolsAutomatically"] = true
-		if len(tools) > 0 {
-			allowed := make([]interface{}, 0, len(tools))
-			for _, name := range tools {
-				allowed = append(allowed, name)
-			}
-			entry["allowedTools"] = allowed
-		}
+	// В mcp.har запись в agent_chat_modules состоит только из pointer +
+	// defaultEnabled; именно этот флаг и есть «run automatically».
+	// Лишние ключи Notion не сохраняет, поэтому не отправляем их.
+	_ = tools
+	entry["defaultEnabled"] = true
+	if !autoRun {
+		// Модуль всё равно добавлен в чат, но без автозапуска инструментов.
+		entry["defaultEnabled"] = false
 	}
 	kept = append(kept, entry)
 	settings["agent_chat_modules"] = kept

@@ -201,6 +201,32 @@ func (r *Runtime) Stream(ctx context.Context, req ChatRequest, emit func(Event))
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 1<<20), 32<<20)
 
+	// Долгие ответы: Notion иногда молчит десятки секунд между блоками, и UI
+	// успевал решить, что поток умер. Шлём ping, пока стрим жив; emit при этом
+	// вызывается из двух горутин, поэтому сериализуем его мьютексом.
+	var emitMu sync.Mutex
+	safeEmit := func(event Event) {
+		emitMu.Lock()
+		defer emitMu.Unlock()
+		emit(event)
+	}
+	streamDone := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-streamDone:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				safeEmit(Event{Type: "ping"})
+			}
+		}
+	}()
+	defer close(streamDone)
+
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
@@ -213,7 +239,7 @@ func (r *Runtime) Stream(ctx context.Context, req ChatRequest, emit func(Event))
 			continue
 		}
 		for _, event := range r.handleFrame(convo, accumulator, frame) {
-			emit(event)
+			safeEmit(event)
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -222,7 +248,7 @@ func (r *Runtime) Stream(ctx context.Context, req ChatRequest, emit func(Event))
 	}
 
 	r.client.finishDebug(debug, nil)
-	emit(Event{Type: "done"})
+	safeEmit(Event{Type: "done"})
 	return nil
 }
 
