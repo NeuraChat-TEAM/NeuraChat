@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react"
-import { Copy, Download, ExternalLink, RotateCw, X } from "lucide-react"
+import { useEffect, useMemo, useRef, useState } from "react"
+import { Code2, Copy, Download, ExternalLink, MoreHorizontal, RotateCw, X } from "lucide-react"
 import type { Artifact } from "../model/artifacts"
 import { artifactFile, previewHtml } from "../model/artifacts"
 import { cn } from "../../../shared/lib/utils"
@@ -22,8 +22,25 @@ export default function ArtifactPanel({
 		artifact.kind === "web" ? "preview" : "code",
 	)
 	const [nonce, setNonce] = useState(0)
+	const [menu, setMenu] = useState(false)
+	const menuRef = useRef<HTMLDivElement>(null)
 	const file = artifactFile(artifact)
 	const doc = useMemo(() => previewHtml(artifact), [artifact])
+
+	// При смене артефакта всегда начинаем с браузера для сайтов и картинок.
+	useEffect(() => {
+		setTab(artifact.kind === "web" ? "preview" : "code")
+		setNonce((n) => n + 1)
+	}, [artifact.id, artifact.kind])
+
+	useEffect(() => {
+		if (!menu) return
+		function onDown(event: MouseEvent) {
+			if (!menuRef.current?.contains(event.target as Node)) setMenu(false)
+		}
+		document.addEventListener("mousedown", onDown)
+		return () => document.removeEventListener("mousedown", onDown)
+	}, [menu])
 
 	function download() {
 		try {
@@ -81,25 +98,51 @@ export default function ArtifactPanel({
 					))}
 				</div>
 
-				<Tooltip label="Копировать код">
-					<Button
-						variant="subtle"
-						size="icon-sm"
-						onClick={() => void navigator.clipboard.writeText(artifact.code)}
-					>
-						<Copy className="size-3.5" />
+				{/* Три точки: скачать файл, посмотреть исходник, открыть снаружи. */}
+				<div className="relative" ref={menuRef}>
+					<Button variant="subtle" size="icon-sm" onClick={() => setMenu((v) => !v)}>
+						<MoreHorizontal className="size-3.5" />
 					</Button>
-				</Tooltip>
-				<Tooltip label="Скачать">
-					<Button variant="subtle" size="icon-sm" onClick={download}>
-						<Download className="size-3.5" />
-					</Button>
-				</Tooltip>
-				<Tooltip label="Открыть в новом окне">
-					<Button variant="subtle" size="icon-sm" onClick={openExternally}>
-						<ExternalLink className="size-3.5" />
-					</Button>
-				</Tooltip>
+					{menu ? (
+						<div className="bg-popover absolute end-0 top-8 z-30 w-56 overflow-hidden rounded-lg border p-1 shadow-lg">
+							{[
+								{
+									label: "Скачать файл",
+									icon: <Download className="size-3.5" />,
+									run: download,
+								},
+								{
+									label: tab === "code" ? "Открыть браузер" : "Показать исходный код",
+									icon: <Code2 className="size-3.5" />,
+									run: () => setTab(tab === "code" ? "preview" : "code"),
+								},
+								{
+									label: "Копировать код",
+									icon: <Copy className="size-3.5" />,
+									run: () => void navigator.clipboard.writeText(artifact.code),
+								},
+								{
+									label: "Открыть в новом окне",
+									icon: <ExternalLink className="size-3.5" />,
+									run: openExternally,
+								},
+							].map((item) => (
+								<button
+									key={item.label}
+									type="button"
+									onClick={() => {
+										setMenu(false)
+										item.run()
+									}}
+									className="hover:bg-accent flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-[12.5px]"
+								>
+									{item.icon}
+									{item.label}
+								</button>
+							))}
+						</div>
+					) : null}
+				</div>
 				<Tooltip label="Закрыть">
 					<Button variant="subtle" size="icon-sm" onClick={onClose}>
 						<X className="size-3.5" />

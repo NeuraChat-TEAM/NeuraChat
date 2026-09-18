@@ -216,7 +216,7 @@ export default function Sidebar({
 	onNew: () => void
 	onDelete: (id: string) => void
 	onRename?: (id: string, title: string) => void
-	onOpenSettings: () => void
+	onOpenSettings: (section?: string) => void
 	onToast?: (msg: string, error?: boolean) => void
 	onWorkspaceSwitched?: () => void
 }) {
@@ -463,7 +463,7 @@ export default function Sidebar({
 						</button>
 						<button
 							type="button"
-							onClick={onOpenSettings}
+							onClick={() => onOpenSettings()}
 							className="text-muted-foreground hover:bg-sidebar-accent hover:text-foreground active:bg-sidebar-accent/70 flex h-8 w-full items-center gap-2 rounded-md px-1.5 text-[14px] transition-colors"
 						>
 							<Settings className="size-4 shrink-0" />

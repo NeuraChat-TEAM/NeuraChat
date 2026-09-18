@@ -51,6 +51,40 @@ const DEFAULTS: Settings = {
 	activeSpaceName: "",
 }
 
+// Что имеет смысл открывать в правой панели-браузере, а не скачивать.
+const PREVIEW_EXT = new Set([
+	".html",
+	".htm",
+	".svg",
+	".md",
+	".txt",
+	".json",
+	".csv",
+	".js",
+	".jsx",
+	".ts",
+	".tsx",
+	".css",
+	".py",
+	".go",
+	".yaml",
+	".yml",
+	".xml",
+	".sql",
+	".sh",
+])
+
+/** Сохраняет base64 на диск через обычную ссылку-скачивание. */
+function saveBase64(dataBase64: string, fileName: string, mime: string) {
+	const bytes = Uint8Array.from(atob(dataBase64), (c) => c.charCodeAt(0))
+	const url = URL.createObjectURL(new Blob([bytes], { type: mime || "application/octet-stream" }))
+	const link = document.createElement("a")
+	link.href = url
+	link.download = fileName
+	link.click()
+	setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
 function cleanThreadTitle(raw: string) {
 	let title = raw.trim()
 	try {
@@ -98,6 +132,8 @@ export default function App() {
 	const [runningThreads, setRunningThreads] = useState<Set<string>>(() => new Set())
 	const runningThreadsRef = useRef(new Set<string>())
 	const [showSettings, setShowSettings] = useState(false)
+	// С какого раздела открывать настройки (сайдбар ведёт сразу к участникам).
+	const [settingsSection, setSettingsSection] = useState<string | undefined>()
 	const [sidebarOpen, setSidebarOpen] = useState(true)
 	// Ширина сайдбара тянется мышью и запоминается между запусками.
 	const [sidebarWidth, setSidebarWidth] = useState(() => {
@@ -704,6 +740,21 @@ export default function App() {
 	// Файлы из шагов (index.html, archive.zip…) открываются в панели-браузере:
 	// текстовые и HTML — с превью, бинарные — ссылкой на скачивание.
 	async function openFile(file: ComputerFile) {
+		if (file.fileName.toLowerCase().endsWith(".zip")) {
+			// Зипы никогда не открываем — только скачиваем.
+			try {
+				const got = await api.fetchAttachment(file.fileUrl, file.fileName)
+				if (got.dataBase64) {
+					saveBase64(got.dataBase64, file.fileName, got.contentType || "application/zip")
+					notify(`Архив ${file.fileName} скачан`)
+					return
+				}
+				if (got.signedUrl) { await api.openURL(got.signedUrl); return }
+			} catch (e) {
+				notify(errText(e), true)
+				return
+			}
+		}
 		try {
 			const got = await api.fetchAttachment(file.fileUrl, file.fileName)
 			const dot = file.fileName.lastIndexOf(".")
@@ -722,10 +773,17 @@ export default function App() {
 				return
 			}
 			if (got.dataBase64) {
+				// Архивы и другие бинарники показывать нечего — сразу скачиваем.
+				if (!got.contentType.startsWith("image/") && !PREVIEW_EXT.has(ext)) {
+					saveBase64(got.dataBase64, file.fileName, got.contentType)
+					notify(`Файл ${file.fileName} скачан`)
+					return
+				}
 				setArtifact({ id: file.id, name, ext, lang: ext.replace(".", ""), code: "", kind: got.contentType.startsWith("image/") ? "web" : "data", mime: got.contentType, dataBase64: got.dataBase64 })
 				setActiveFile(file.fileUrl)
 				return
 			}
+			// Нет тела файла — отдаём подписанную ссылку браузеру/скачиванию.
 			if (got.signedUrl) { await api.openURL(got.signedUrl); return }
 			notify("Файл нельзя показать в превью", true)
 		} catch (e) {
@@ -760,7 +818,7 @@ export default function App() {
 					onNew={newChat}
 					onDelete={(id) => void removeThread(id)}
 					onRename={(id, title) => void renameThread(id, title)}
-					onOpenSettings={() => setShowSettings(true)}
+					onOpenSettings={(target) => { setSettingsSection(target); setShowSettings(true) }}
 					onToast={notify}
 					onWorkspaceSwitched={() => void switchedWorkspace()}
 				/>
@@ -842,7 +900,8 @@ export default function App() {
 				    с кнопками окна остаётся видимым и окно не «прыгает». */}
 				<SettingsModal
 					open={showSettings}
-					onOpenChange={setShowSettings}
+					initialSection={settingsSection as never}
+					onOpenChange={(next) => { setShowSettings(next); if (!next) setSettingsSection(undefined) }}
 					navWidth={sidebarWidth}
 					settings={settings}
 					models={models}

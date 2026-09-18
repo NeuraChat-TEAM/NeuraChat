@@ -56,7 +56,7 @@ export default function WorkspaceMenu({
 }: {
 	state: WorkspaceState | null
 	onState: (next: WorkspaceState) => void
-	onOpenSettings: () => void
+	onOpenSettings: (section?: string) => void
 	onToast: (msg: string, error?: boolean) => void
 	onSwitched: () => void
 }) {
@@ -260,6 +260,17 @@ export default function WorkspaceMenu({
 							className="hover:bg-sidebar-accent focus-visible:ring-ring flex h-8 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-[13px] transition-colors focus-visible:ring-2"
 						>
 							<Settings className="size-4" /> Настройки
+						</button>
+						{/* Участники текущего воркспейса: кик и приглашения. */}
+						<button
+							type="button"
+							onClick={() => {
+								setOpen(false)
+								onOpenSettings("members")
+							}}
+							className="hover:bg-sidebar-accent focus-visible:ring-ring flex h-8 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-[13px] transition-colors focus-visible:ring-2"
+						>
+							<Users className="size-4" /> Участники воркспейса
 						</button>
 						<button
 							type="button"

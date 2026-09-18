@@ -32,10 +32,11 @@ import {
 	Sparkles,
 	Terminal,
 	Trash2,
+	UserPlus,
 	Users,
 	Wrench,
 } from "lucide-react"
-import { api, errText, type MarketplaceServer, type NgrokAuthState } from "../../../shared/api/api"
+import { api, errText, type MarketplaceServer, type NgrokAuthState, type SpaceMembers } from "../../../shared/api/api"
 import { cn } from "../../../shared/lib/utils"
 import type {
 	AIUsage,
@@ -73,13 +74,14 @@ import {
 	Textarea,
 } from "../../../shared/ui"
 
-type SectionKey = "overview" | "accounts" | "usage" | "workspaces" | "ai" | "tools" | "appearance" | "advanced" | "about"
+type SectionKey = "overview" | "accounts" | "usage" | "workspaces" | "members" | "ai" | "tools" | "appearance" | "advanced" | "about"
 type ToolTab = "builtin" | "servers" | "catalog" | "developer"
 
 const SECTIONS = [
 	{ key: "overview", label: "Обзор", group: "Основное", icon: LayoutDashboard },
 	{ key: "accounts", label: "Аккаунты", group: "Основное", icon: Users },
 	{ key: "workspaces", label: "Рабочие пространства", group: "Основное", icon: Database },
+	{ key: "members", label: "Участники воркспейса", group: "Основное", icon: UserPlus },
 	{ key: "usage", label: "Лимиты и использование", group: "Основное", icon: Gauge },
 	{ key: "ai", label: "AI и чат", group: "Настройки", icon: Sparkles },
 	{ key: "tools", label: "Инструменты", group: "Настройки", icon: Plug },
@@ -118,6 +120,27 @@ function usageState(used: number, limit: number) {
 	if (pct >= 0.9) return { label: "Почти исчерпан", color: "bg-red-500" }
 	if (pct >= 0.75) return { label: "Повышенный расход", color: "bg-amber-500" }
 	return { label: "В норме", color: "bg-emerald-500" }
+}
+
+/**
+ * Бейдж плана: Notion отдаёт plan_type вроде team/business/free/personal,
+ * а trial виден по слову trial в том же значении.
+ */
+function planBadge(planType: string): { label: string; tone?: "ok" | "muted" } {
+	const plan = (planType || "").toLowerCase()
+	if (plan.includes("trial")) return { label: "freetrial", tone: "muted" }
+	if (plan.includes("business") || plan.includes("team") || plan.includes("enterprise"))
+		return { label: "business", tone: "ok" }
+	if (!plan) return { label: "план не указан" }
+	return { label: plan }
+}
+
+/** Процент месячного лимита; null — данные по этому воркспейсу ещё не считаны. */
+function limitPercent(usage: AIUsage | null, active: boolean): number | null {
+	if (!active || !usage) return null
+	const window = usage.monthly ?? usage.rolling
+	if (!window || !window.limit) return null
+	return Math.min(100, Math.max(0, (window.used / window.limit) * 100))
 }
 
 function UsageMeter({ title, window, fallbackUsed = 0, fallbackLimit = 0 }: { title: string; window?: UsageWindow; fallbackUsed?: number; fallbackLimit?: number }) {
@@ -183,9 +206,10 @@ function SectionHeader({ title, description, action }: { title: string; descript
 	</div>
 }
 
-export default function SettingsModal({ open, onOpenChange, navWidth = 276, settings, models, connection, onSaved, onConnectionChange, onToast }: {
+export default function SettingsModal({ open, onOpenChange, navWidth = 276, settings, models, connection, initialSection, onSaved, onConnectionChange, onToast }: {
 	open: boolean
 	onOpenChange: (open: boolean) => void
+	initialSection?: SectionKey
 	navWidth?: number
 	settings: Settings
 	models: Model[]
@@ -222,6 +246,16 @@ export default function SettingsModal({ open, onOpenChange, navWidth = 276, sett
 	const [newServer, setNewServer] = useState({ name: "", url: "", token: "", query: "", headers: "", autoRun: true })
 	const [ngrokToken, setNgrokToken] = useState("")
 	const [revealDeveloper, setRevealDeveloper] = useState(false)
+	// Участники воркспейса, приглашения и редакторы настроек.
+	const [membersSpaceId, setMembersSpaceId] = useState("")
+	const [members, setMembers] = useState<SpaceMembers | null>(null)
+	const [inviteIds, setInviteIds] = useState<string[]>([])
+	const [inviteEmails, setInviteEmails] = useState("")
+	const [inviteRole, setInviteRole] = useState("member")
+	const [inviteOpen, setInviteOpen] = useState(false)
+	const [spaceDraft, setSpaceDraft] = useState({ name: "", icon: "" })
+	const [accountDraft, setAccountDraft] = useState({ name: "", avatar: "" })
+	void members
 
 	const activeAccount = workspaces?.accounts.find(a => a.userId === workspaces.activeUserId)
 	const activeSpace = activeAccount?.spaces.find(s => s.id === workspaces?.activeSpaceId)
@@ -247,6 +281,14 @@ export default function SettingsModal({ open, onOpenChange, navWidth = 276, sett
 	}
 
 	useEffect(() => { if (open) { setDraft(settings); void refreshAll() } }, [open, settings])
+	// Открытие сразу на нужном разделе — например «Участники воркспейса» из сайдбара.
+	useEffect(() => { if (open && initialSection) setSection(initialSection) }, [open, initialSection])
+	// В разделе участников по умолчанию показываем активный воркспейс.
+	useEffect(() => {
+		if (!open || section !== "members" || membersSpaceId) return
+		const target = workspaces?.activeSpaceId
+		if (target) void loadMembers(target)
+	}, [open, section, workspaces?.activeSpaceId, membersSpaceId])
 	useEffect(() => {
 		if (!open || section !== "advanced" || logsPaused) return
 		const timer = window.setInterval(() => api.notcodeLogs().then(setLogs).catch(() => {}), 2500)
@@ -274,6 +316,36 @@ export default function SettingsModal({ open, onOpenChange, navWidth = 276, sett
 			setWorkspaces(next); onConnectionChange(await api.connectionStatus()); setUsage(await api.aiUsage()); onToast(`Открыто: ${space.name}`)
 		})
 	}
+	// Список участников тянем по конкретному воркспейсу (getVisibleUsers).
+	async function loadMembers(spaceId: string) {
+		if (!spaceId) return
+		setMembersSpaceId(spaceId)
+		await run(`members:${spaceId}`, async () => {
+			const next = await api.listMembers(spaceId)
+			setMembers(next)
+			setSpaceDraft({ name: next.spaceName || "", icon: "" })
+			setInviteIds([])
+		})
+	}
+	async function sendInvites() {
+		if (!membersSpaceId) return
+		const emails = inviteEmails.split(/[\s,;]+/).map(v => v.trim()).filter(Boolean)
+		if (!inviteIds.length && !emails.length) { onToast("Никого не выбрали", true); return }
+		await run("invite", async () => {
+			const result = await api.inviteMembers(membersSpaceId, inviteIds, emails, inviteRole)
+			setMembers(result)
+			setInviteIds([]); setInviteEmails(""); setInviteOpen(false)
+			setWorkspaces(await api.listWorkspaces())
+			onToast("Приглашения отправлены")
+		})
+	}
+	async function kickMember(userId: string, name: string) {
+		if (!membersSpaceId) return
+		await run(`kick:${userId}`, async () => {
+			setMembers(await api.removeMember(membersSpaceId, userId))
+			onToast(`${name} удалён из воркспейса`)
+		})
+	}
 	async function loadCatalog(reset = true) {
 		setBusy("catalog"); setMarketError("")
 		try {
@@ -290,7 +362,18 @@ export default function SettingsModal({ open, onOpenChange, navWidth = 276, sett
 
 	const filteredSections = SECTIONS.filter(item => !navQuery.trim() || item.label.toLowerCase().includes(navQuery.trim().toLowerCase()))
 	const grouped = filteredSections.reduce<Record<string, typeof filteredSections>>((all, item) => { (all[item.group] ||= []).push(item); return all }, {})
-	const workspaceRows = (workspaces?.accounts ?? []).flatMap(account => account.spaces.map(space => ({ account, space }))).filter(({ account, space }) => (accountFilter === "all" || account.userId === accountFilter) && space.name.toLowerCase().includes(workspaceQuery.toLowerCase()))
+	// Сначала «чистые» воркспейсы (маленький процент лимита), внизу — выжатые на 100%.
+	const workspaceRows = (workspaces?.accounts ?? [])
+		.flatMap(account => account.spaces.map(space => ({ account, space, percent: limitPercent(usage, space.active && space.id === workspaces?.activeSpaceId) })))
+		.filter(({ account, space }) => (accountFilter === "all" || account.userId === accountFilter) && space.name.toLowerCase().includes(workspaceQuery.toLowerCase()))
+		.sort((a, b) => {
+			const left = a.percent ?? -1
+			const right = b.percent ?? -1
+			if (left !== right) return left - right
+			const plans = (value: string) => (planBadge(value).label === "business" ? 0 : planBadge(value).label === "freetrial" ? 1 : 2)
+			const planDiff = plans(a.space.planType) - plans(b.space.planType)
+			return planDiff !== 0 ? planDiff : a.space.name.localeCompare(b.space.name)
+		})
 	const filteredLogs = logs.filter(line => (logSource === "all" || line.source === logSource) && redact(line.text).toLowerCase().includes(logQuery.toLowerCase()))
 	const warnings = [!connection?.connected ? "Подключите Notion-аккаунт" : "", !ngrok?.configured ? "Для встроенных инструментов нужен ngrok authtoken" : "", status?.error || "", usage?.limitReached ? "Лимит AI активного пространства исчерпан" : ""].filter(Boolean)
 
@@ -331,7 +414,47 @@ export default function SettingsModal({ open, onOpenChange, navWidth = 276, sett
 			{section === "workspaces" ? <>
 				<SectionHeader title="Рабочие пространства" description="Здесь явно видно, через какой аккаунт доступно каждое пространство." action={<Button variant="secondary" onClick={() => run("spaces", async () => { setWorkspaces(await api.listWorkspaces()); setLoadedAt(Date.now()) })}><RefreshCw className="size-4" />Обновить</Button>} />
 				<div className="flex gap-2"><div className="relative flex-1"><Search className="text-muted-foreground absolute left-2.5 top-2.5 size-4" /><Input value={workspaceQuery} onChange={e => setWorkspaceQuery(e.target.value)} placeholder="Поиск по названию" className="pl-8" /></div><Select value={accountFilter} onValueChange={setAccountFilter}><SelectTrigger className="w-64"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Все аккаунты</SelectItem>{workspaces?.accounts.map(account => <SelectItem key={account.userId} value={account.userId}>{account.name || account.email}</SelectItem>)}</SelectContent></Select></div>
-				<div className="overflow-hidden rounded-xl border">{workspaceRows.map(({ account, space }) => <div key={`${account.userId}:${space.id}`} className={cn("bg-card flex items-center gap-3 border-b p-3 last:border-b-0 transition-colors", space.active && usage?.limitReached && "border-red-500/30 bg-red-500/10")}><div className="bg-muted grid size-9 place-items-center rounded-lg">{space.icon || <Database className="size-4" />}</div><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="truncate text-sm font-medium">{space.name}</p>{space.active ? <Badge tone="ok">активно</Badge> : null}{space.isGuest ? <Badge>гость</Badge> : null}</div><p className="text-muted-foreground truncate text-xs">{account.name || account.email} · {space.planType || "план не указан"}</p></div><Button variant={space.active ? "ghost" : "secondary"} disabled={space.active || busy === `space:${space.id}`} onClick={() => void switchSpace(account, space)}>{space.active ? <Check className="size-4" /> : "Выбрать"}</Button></div>)}{!workspaceRows.length ? <div className="p-4"><EmptyState icon={Database} title="Ничего не найдено" text="Измените поиск или фильтр аккаунта." /></div> : null}</div>
+				<div className="overflow-hidden rounded-xl border">{workspaceRows.map(({ account, space, percent }) => <div key={`${account.userId}:${space.id}`} className={cn("bg-card flex items-center gap-3 border-b p-3 last:border-b-0 transition-colors", space.active && usage?.limitReached && "border-red-500/30 bg-red-500/10")}><div className="bg-muted grid size-9 place-items-center rounded-lg">{space.icon || <Database className="size-4" />}</div><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="truncate text-sm font-medium">{space.name}</p>{space.active ? <Badge tone="ok">активно</Badge> : null}{space.isGuest ? <Badge>гость</Badge> : null}<Badge tone={planBadge(space.planType).tone}>{planBadge(space.planType).label}</Badge></div><p className="text-muted-foreground truncate text-xs">{account.name || account.email}{percent === null ? "" : " · месячный лимит"}</p></div>{percent === null ? null : <span className={cn("text-xs tabular-nums", percent >= 100 ? "font-semibold text-red-500" : "text-muted-foreground")}>{percent.toFixed(0)}%</span>}<Button variant="ghost" disabled={busy === `members:${space.id}`} onClick={() => { setSection("members"); void loadMembers(space.id) }}><UserPlus className="size-4" />Пригласить</Button><Button variant={space.active ? "ghost" : "secondary"} disabled={space.active || busy === `space:${space.id}`} onClick={() => void switchSpace(account, space)}>{space.active ? <Check className="size-4" /> : "Выбрать"}</Button></div>)}{!workspaceRows.length ? <div className="p-4"><EmptyState icon={Database} title="Ничего не найдено" text="Измените поиск или фильтр аккаунта." /></div> : null}</div>
+			</> : null}
+
+			{section === "members" ? <>
+				<SectionHeader title="Участники воркспейса" description="Приглашайте свои аккаунты или людей по почте, удаляйте лишних и меняйте настройки пространства." action={<Button variant="secondary" disabled={!membersSpaceId} onClick={() => void loadMembers(membersSpaceId)}><RefreshCw className="size-4" />Обновить</Button>} />
+
+				<div className="flex items-center gap-2">
+					<Select value={membersSpaceId || workspaces?.activeSpaceId || ""} onValueChange={value => void loadMembers(value)}>
+						<SelectTrigger className="w-80"><SelectValue placeholder="Выберите воркспейс" /></SelectTrigger>
+						<SelectContent>{(workspaces?.accounts ?? []).flatMap(account => account.spaces.map(space => <SelectItem key={`${account.userId}:${space.id}`} value={space.id}>{space.name}</SelectItem>))}</SelectContent>
+					</Select>
+					<Button variant="brand" disabled={!membersSpaceId} onClick={() => setInviteOpen(true)}><UserPlus className="size-4" />Пригласить</Button>
+				</div>
+
+				{members ? <div className="overflow-hidden rounded-xl border">
+					{(members.members ?? []).map(member => <div key={member.userId} className="bg-card flex items-center gap-3 border-b p-3 last:border-b-0">
+						<div className="bg-muted grid size-9 place-items-center overflow-hidden rounded-full text-xs">{member.avatar ? <img src={member.avatar} alt="" className="size-full object-cover" /> : (member.name || member.email || "?").slice(0, 1).toUpperCase()}</div>
+						<div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="truncate text-sm font-medium">{member.name || member.email || member.userId}</p>{member.isSelf ? <Badge tone="ok">вы</Badge> : null}{member.isOwner ? <Badge>владелец</Badge> : null}</div><p className="text-muted-foreground truncate text-xs">{member.email || "почта скрыта"}{member.role ? ` · ${member.role}` : ""}</p></div>
+						<Button variant="ghost" disabled={member.isSelf || busy === `kick:${member.userId}`} onClick={() => void kickMember(member.userId, member.name || member.email || "Участник")}><Trash2 className="size-4" />Выгнать</Button>
+					</div>)}
+					{!(members.members ?? []).length ? <div className="p-4"><EmptyState icon={Users} title="Участников нет" text="В этом воркспейсе пока только вы." /></div> : null}
+				</div> : <EmptyState icon={Users} title="Выберите воркспейс" text="Список участников загрузится после выбора пространства." />}
+
+				<Card>
+					<p className="text-sm font-medium">Настройки воркспейса</p>
+					<div className="mt-3 grid gap-3 sm:grid-cols-2">
+						<div><Label>Название</Label><Input className="mt-2" value={spaceDraft.name} onChange={e => setSpaceDraft(current => ({ ...current, name: e.target.value }))} placeholder="Моё пространство" /></div>
+						<div><Label>Аватарка: emoji или ссылка</Label><Input className="mt-2" value={spaceDraft.icon} onChange={e => setSpaceDraft(current => ({ ...current, icon: e.target.value }))} placeholder="🚀 или https://..." /></div>
+					</div>
+					<div className="mt-3 flex justify-end"><Button variant="brand" disabled={!membersSpaceId || busy === "space-settings"} onClick={() => void run("space-settings", async () => { setWorkspaces(await api.updateWorkspace(membersSpaceId, spaceDraft.name.trim(), spaceDraft.icon.trim())); onToast("Воркспейс обновлён") })}>Сохранить</Button></div>
+				</Card>
+
+				<Card>
+					<p className="text-sm font-medium">Настройки аккаунта</p>
+					<p className="text-muted-foreground mt-1 text-xs">{activeAccount?.email || "Аккаунт не подключён"}</p>
+					<div className="mt-3 grid gap-3 sm:grid-cols-2">
+						<div><Label>Имя</Label><Input className="mt-2" value={accountDraft.name} onChange={e => setAccountDraft(current => ({ ...current, name: e.target.value }))} placeholder={activeAccount?.name || "Имя и фамилия"} /></div>
+						<div><Label>Аватарка: ссылка</Label><Input className="mt-2" value={accountDraft.avatar} onChange={e => setAccountDraft(current => ({ ...current, avatar: e.target.value }))} placeholder="https://..." /></div>
+					</div>
+					<div className="mt-3 flex justify-end"><Button variant="brand" disabled={busy === "account-settings"} onClick={() => void run("account-settings", async () => { setWorkspaces(await api.updateAccount(accountDraft.name.trim(), accountDraft.avatar.trim())); onToast("Аккаунт обновлён") })}>Сохранить</Button></div>
+				</Card>
 			</> : null}
 
 			{section === "ai" ? <>
@@ -358,6 +481,12 @@ export default function SettingsModal({ open, onOpenChange, navWidth = 276, sett
 			{section === "about" ? <><SectionHeader title="О приложении" description="Neura — desktop-клиент для общения с Notion AI и подключёнными инструментами." /><Card><div className="flex items-center gap-4"><div className="bg-foreground text-background grid size-12 place-items-center rounded-xl"><Bot className="size-6" /></div><div><p className="text-lg font-semibold">Neura</p><p className="text-muted-foreground text-sm">Desktop application</p></div></div><Separator /><Button variant="secondary" onClick={() => void api.openURL("https://" + "www.notion.so")}>Открыть Notion <ExternalLink className="size-4" /></Button></Card></> : null}
 		</main></ScrollArea></div>
 
+		<Dialog open={inviteOpen} onOpenChange={setInviteOpen}><DialogContent className="max-w-lg p-0"><div className="border-b p-5"><DialogTitle>Пригласить в {members?.spaceName || "воркспейс"}</DialogTitle><DialogDescription>Свои аккаунты и почты. Тех, кто уже в пространстве, пригласить повторно нельзя.</DialogDescription></div><div className="space-y-4 p-5">
+			<div className="max-h-56 overflow-y-auto rounded-lg border">{(members?.candidates ?? []).map(candidate => <label key={candidate.userId} className="hover:bg-accent flex items-center gap-3 border-b p-2.5 text-sm last:border-b-0"><input type="checkbox" checked={inviteIds.includes(candidate.userId)} onChange={e => setInviteIds(current => e.target.checked ? [...current, candidate.userId] : current.filter(id => id !== candidate.userId))} /><span className="min-w-0 flex-1 truncate">{candidate.name || candidate.email}</span><span className="text-muted-foreground truncate text-xs">{candidate.email}</span></label>)}{!(members?.candidates ?? []).length ? <p className="text-muted-foreground p-3 text-xs">Все ваши аккаунты уже в этом воркспейсе.</p> : null}</div>
+			<div><Label>Почты через запятую</Label><Textarea className="mt-2 min-h-20 text-sm" value={inviteEmails} onChange={e => setInviteEmails(e.target.value)} placeholder="name@example.com, other@example.com" /></div>
+			<div><Label>Роль</Label><Select value={inviteRole} onValueChange={setInviteRole}><SelectTrigger className="mt-2 w-48"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="member">Участник</SelectItem><SelectItem value="owner">Владелец</SelectItem></SelectContent></Select></div>
+			<div className="flex justify-end gap-2"><Button variant="secondary" onClick={() => setInviteOpen(false)}>Отмена</Button><Button variant="brand" disabled={busy === "invite"} onClick={() => void sendInvites()}>Пригласить</Button></div>
+		</div></DialogContent></Dialog>
 		<Dialog open={accountDialog} onOpenChange={setAccountDialog}><DialogContent className="max-w-2xl p-0"><div className="border-b p-5"><DialogTitle>Добавить Notion-аккаунт</DialogTitle><DialogDescription>Сессия импортируется из запроса Notion и хранится локально.</DialogDescription></div><div className="space-y-4 p-5"><ol className="space-y-2 text-sm"><li><b>1.</b> Откройте Notion в браузере и отправьте сообщение Notion AI.</li><li><b>2.</b> В DevTools → Network найдите <code>runInferenceTranscript</code>.</li><li><b>3.</b> Copy as cURL и вставьте результат ниже.</li></ol><Textarea value={curl} onChange={e => setCurl(e.target.value)} className="min-h-44 font-mono text-xs" placeholder="Вставьте Copy as cURL из DevTools" /><p className="text-muted-foreground text-xs">Cookie и заголовки не отображаются после импорта и не попадают в диагностику.</p><div className="flex justify-end gap-2"><Button variant="secondary" onClick={() => setAccountDialog(false)}>Отмена</Button><Button variant="brand" disabled={!curl.trim() || busy === "import-account"} onClick={() => run("import-account", async () => { const next = await api.importCurl(curl); onConnectionChange(next); setWorkspaces(await api.listWorkspaces()); setCurl(""); setAccountDialog(false); onToast("Аккаунт подключён") })}>Проверить и подключить</Button></div></div></DialogContent></Dialog>
 		<Dialog open={serverDialog} onOpenChange={setServerDialog}><DialogContent className="max-w-lg p-0"><div className="border-b p-5"><DialogTitle>Добавить MCP-сервер</DialogTitle><DialogDescription>Секрет сохраняется через существующий защищённый контур подключения.</DialogDescription></div><div className="space-y-4 p-5"><div><Label>Название</Label><Input className="mt-2" value={newServer.name} onChange={e => setNewServer(current => ({ ...current, name: e.target.value }))} /></div><div><Label>URL</Label><Input className="mt-2" value={newServer.url} onChange={e => setNewServer(current => ({ ...current, url: e.target.value }))} placeholder="https://example.com/mcp" /></div><div><Label>Токен, если нужен</Label><Input className="mt-2" type="password" autoComplete="off" value={newServer.token} onChange={e => setNewServer(current => ({ ...current, token: e.target.value }))} /></div><div><Label>Query-параметры</Label><Input className="mt-2" value={newServer.query} onChange={e => setNewServer(current => ({ ...current, query: e.target.value }))} placeholder="api_key=...&profile=..." /><p className="text-muted-foreground mt-1 text-xs">Smithery и подобные хостинги требуют ключ прямо в адресе.</p></div><div><Label>Доп. заголовки</Label><Input className="mt-2" value={newServer.headers} onChange={e => setNewServer(current => ({ ...current, headers: e.target.value }))} placeholder="X-API-Key: abc; X-Profile: main" /></div><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={newServer.autoRun} onChange={e => setNewServer(current => ({ ...current, autoRun: e.target.checked }))} />Разрешить запуск инструментов автоматически</label><div className="flex justify-end gap-2"><Button variant="secondary" onClick={() => setServerDialog(false)}>Отмена</Button><Button variant="brand" disabled={!newServer.name.trim() || !newServer.url.trim()} onClick={() => run("add-server", async () => { await api.mcpConnect({ name: newServer.name.trim(), serverUrl: newServer.url.trim(), token: newServer.token.trim() || undefined, query: parsePairs(newServer.query, "="), headers: parsePairs(newServer.headers, ":"), autoRun: newServer.autoRun, runWriteToolsAutomatically: newServer.autoRun }); setModules(await api.mcpList()); setNewServer({ name: "", url: "", token: "", query: "", headers: "", autoRun: true }); setServerDialog(false); onToast("MCP-сервер добавлен") })}>Проверить и добавить</Button></div></div></DialogContent></Dialog>
 	</div>

@@ -44,6 +44,32 @@ export type FetchedFile = {
 	signedUrl?: string
 }
 
+/** Участник воркспейса. */
+export type SpaceMember = {
+	userId: string
+	name: string
+	email: string
+	avatar: string
+	role: string
+	isSelf: boolean
+	isOwner: boolean
+}
+
+/** Аккаунт сессии, которого ещё нет в воркспейсе. */
+export type InviteCandidate = {
+	userId: string
+	name: string
+	email: string
+	avatar: string
+}
+
+export type SpaceMembers = {
+	spaceId: string
+	spaceName: string
+	members: SpaceMember[] | null
+	candidates: InviteCandidate[] | null
+}
+
 /** Карточка MCP-сервера из официального реестра. */
 export type MarketplaceServer = {
 	name: string
@@ -146,6 +172,22 @@ export const api = {
 	switchWorkspace: (userId: string, spaceId: string, spaceViewId: string, spaceName: string) =>
 		call<WorkspaceState>("SwitchWorkspace", userId, spaceId, spaceViewId, spaceName),
 	createWorkspace: (name: string) => call<WorkspaceState>("CreateWorkspace", name),
+	// Участники воркспейса: состав + аккаунты сессии без этого воркспейса.
+	listMembers: (spaceId: string) => call<SpaceMembers>("ListMembers", spaceId),
+	inviteMembers: (spaceId: string, userIds: string[], emails: string[], role: string) =>
+		call<SpaceMembers>(
+			"InviteMembers",
+			spaceId,
+			userIds,
+			emails,
+			role,
+		),
+	removeMember: (spaceId: string, userId: string) =>
+		call<SpaceMembers>("RemoveMember", spaceId, userId),
+	updateWorkspace: (spaceId: string, name: string, icon: string) =>
+		call<WorkspaceState>("UpdateWorkspace", spaceId, name, icon),
+	updateAccount: (name: string, avatar: string) =>
+		call<WorkspaceState>("UpdateAccount", name, avatar),
 
 	// notcode + mcp
 	notcodeStatus: () => call<NotcodeStatus>("NotcodeStatus"),
