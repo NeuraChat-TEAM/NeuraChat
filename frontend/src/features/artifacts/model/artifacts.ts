@@ -17,6 +17,10 @@ export type Artifact = {
 	kind: ArtifactKind
 	mime?: string
 	dataBase64?: string
+	/** Файл ещё тянется из Notion: панель уже открыта и показывает загрузку. */
+	loading?: boolean
+	/** Загрузка упала — текст ошибки для панели. */
+	error?: string
 }
 
 export type SurveyOption = { id: string; label: string }

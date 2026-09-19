@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Code2, Copy, Download, ExternalLink, MoreHorizontal, RotateCw, X } from "lucide-react"
+import { Code2, Copy, Download, ExternalLink, Loader2, MoreHorizontal, RotateCw, TriangleAlert, X } from "lucide-react"
 import type { Artifact } from "../model/artifacts"
 import { artifactFile, previewHtml } from "../model/artifacts"
 import { cn } from "../../../shared/lib/utils"
@@ -150,7 +150,23 @@ export default function ArtifactPanel({
 				</Tooltip>
 			</div>
 
-			{tab === "preview" ? (
+			{/* Панель открывается СРАЗУ по клику, а файл догружается уже внутри неё:
+			    раньше загрузка шла невидимо и казалось, что кнопка не работает. */}
+			{artifact.loading ? (
+				<div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3">
+					<Loader2 className="text-muted-foreground size-6 animate-spin" />
+					<p className="text-muted-foreground text-sm">Загружаю {file}…</p>
+					<div className="bg-muted h-1 w-40 overflow-hidden rounded-full">
+						<div className="bg-foreground/60 h-full w-1/3 animate-[shimmer-bar_1.1s_ease-in-out_infinite] rounded-full" />
+					</div>
+				</div>
+			) : artifact.error ? (
+				<div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
+					<TriangleAlert className="text-destructive size-6" />
+					<p className="text-sm font-medium">Не удалось открыть {file}</p>
+					<p className="text-muted-foreground text-xs">{artifact.error}</p>
+				</div>
+			) : tab === "preview" ? (
 				<iframe
 					key={nonce}
 					title={file}

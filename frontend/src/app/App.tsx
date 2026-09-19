@@ -139,6 +139,13 @@ type RevealState = {
  * Сколько из chunk уже есть в конце seen. Возвращает только новую часть.
  * Короткие совпадения не считаем дублем: «но но» или «и и» вполне легальны.
  */
+/** Максимальное отставание анимации от реального потока Notion. */
+const CATCH_UP_MS = 900
+/** Потолок скорости — иначе проявление превращается в рывок. */
+const MAX_CHARS_PER_MS = 3.5
+/** Больше этого в очереди не держим: лишнее показываем сразу. */
+const MAX_BACKLOG = 1400
+
 function dropRepeat(seen: string, chunk: string): string {
 	if (!chunk) return ""
 	if (chunk.length >= 8 && seen.endsWith(chunk)) return ""
@@ -341,12 +348,22 @@ export default function App() {
 				return
 			}
 			current.lastFrame = now
-			// Если модель прислала гигантский кусок, темп подрастает, но плавно:
-			// текст всё равно проявляется побуквенно, а не мгновенно.
-			const backlogBoost = Math.min(4, 1 + current.queue.length / 2200)
-			const budget = current.carry + elapsed * current.charsPerMs * backlogBoost
+			// Синхрон с Notion. Главное правило: отставание от пришедшего текста
+			// никогда не больше CATCH_UP_MS. Раньше темп был почти фиксирован,
+			// и на длинном ответе приложение отставало от Notion на десятки секунд.
+			const needed = current.queue.length / CATCH_UP_MS
+			const speed = Math.min(MAX_CHARS_PER_MS, Math.max(current.charsPerMs, needed))
+			const budget = current.carry + elapsed * speed
 			let take = Math.floor(budget)
 			current.carry = budget - take
+			// Аварийный догон: если в очереди уже огромный хвост (модель ушла
+			// вперёд на несколько абзацев), отдаём лишнее сразу и проявляем
+			// побуквенно только последние MAX_BACKLOG символов.
+			if (current.queue.length > MAX_BACKLOG) {
+				const dump = current.queue.length - MAX_BACKLOG
+				appendVisibleText(targetThreadId, current.queue.slice(0, dump))
+				current.queue = current.queue.slice(dump)
+			}
 			if (take > 0 && current.queue) {
 				take = Math.min(current.queue.length, Math.max(1, take))
 				// Проявляем посимвольно: хвост с градиентом и блюром рисует CSS,

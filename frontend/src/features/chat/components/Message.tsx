@@ -36,6 +36,40 @@ import { Badge, Button, ScrollArea, Tabs, TabsContent, TabsList, TabsTrigger, To
 
 const copy = (text: string) => void navigator.clipboard.writeText(text)
 
+type LoadedFile = { dataBase64?: string; contentType?: string; signedUrl?: string }
+type LoadFile = (file: ComputerFile) => Promise<LoadedFile>
+
+// Кэш картинок на всё приложение: один файл тянется ровно один раз,
+// даже если сообщение перерисовалось сотню раз во время стрима.
+const imageSrcCache = new Map<string, string>()
+const imageLoads = new Map<string, Promise<string>>()
+
+/** Предзагрузка: возвращает готовый src или общий promise загрузки. */
+function loadImageSrc(file: ComputerFile, onLoadFile?: LoadFile): Promise<string> {
+	const key = file.fileUrl || file.id
+	const ready = imageSrcCache.get(key)
+	if (ready) return Promise.resolve(ready)
+	const running = imageLoads.get(key)
+	if (running) return running
+	if (!onLoadFile) return Promise.resolve("")
+	const task = onLoadFile(file)
+		.then((got) => {
+			const src = got.dataBase64
+				? `data:${got.contentType || "image/png"};base64,${got.dataBase64}`
+				: got.signedUrl || ""
+			if (src) {
+				imageSrcCache.set(key, src)
+				// Греем кэш браузера, чтобы к моменту показа картинка была готова.
+				const img = new Image()
+				img.src = src
+			}
+			return src
+		})
+		.finally(() => imageLoads.delete(key))
+	imageLoads.set(key, task)
+	return task
+}
+
 /** Карточка файла как в Notion: 32px иконка, имя, расширение, размер. */
 export function FileChip({
 	file,
@@ -99,24 +133,22 @@ export function InlineImage({
 	onLoadFile?: (file: ComputerFile) => Promise<{ dataBase64?: string; contentType?: string; signedUrl?: string }>
 	onOpen?: (file: ComputerFile) => void
 }) {
-	const [src, setSrc] = useState("")
+	const [src, setSrc] = useState(() => imageSrcCache.get(file.fileUrl || file.id) ?? "")
 	const [failed, setFailed] = useState("")
 
 	useEffect(() => {
 		let alive = true
-		setSrc("")
+		const cached = imageSrcCache.get(file.fileUrl || file.id)
+		if (cached) {
+			setSrc(cached)
+			return
+		}
 		setFailed("")
-		if (!onLoadFile) return
-		onLoadFile(file)
-			.then((got) => {
+		loadImageSrc(file, onLoadFile)
+			.then((next) => {
 				if (!alive) return
-				if (got.dataBase64) {
-					setSrc(`data:${got.contentType || "image/png"};base64,${got.dataBase64}`)
-				} else if (got.signedUrl) {
-					setSrc(got.signedUrl)
-				} else {
-					setFailed("нет содержимого")
-				}
+				if (next) setSrc(next)
+				else setFailed("нет содержимого")
 			})
 			.catch((e: unknown) => {
 				if (alive) setFailed(e instanceof Error ? e.message : String(e))
@@ -468,6 +500,11 @@ export function AssistantMessage({
 	}, [turn.parts])
 	// Картинки показываем самими картинками, остальное — карточками файлов.
 	const stepImages = useMemo(() => stepFiles.filter((f) => isImage(f)), [stepFiles])
+	// Предзагрузка: картинки начинают тянуться сразу, как только пришёл шаг.
+	useEffect(() => {
+		if (!onLoadFile) return
+		for (const file of stepImages) void loadImageSrc(file, onLoadFile).catch(() => {})
+	}, [stepImages, onLoadFile])
 	const stepDocs = useMemo(() => stepFiles.filter((f) => !isImage(f)), [stepFiles])
 	// Опросники из ```survey остались в сообщении; ask-survey уехал в инпут.
 	const allSurveys = surveys
