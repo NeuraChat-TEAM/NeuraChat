@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"strings"
+	"time"
 
 	"neura/internal/notion"
 	"neura/internal/store"
@@ -171,6 +172,95 @@ func (a *App) SaveMessage(message store.Message) error {
 	_ = a.db.AdoptThread(message.ThreadID, a.activeSpace())
 	return a.db.SaveMessage(message)
 }
+
+// ThreadSyncResult — состояние чата после сверки с Notion.
+type ThreadSyncResult struct {
+	// Running — ответ ещё генерируется (в приложении или в самом Notion).
+	Running bool `json:"running"`
+	// Streaming — поток идёт именно через это приложение, UI рисует его сам.
+	Streaming bool            `json:"streaming"`
+	Found     bool            `json:"found"`
+	Title     string          `json:"title"`
+	Messages  []store.Message `json:"messages"`
+}
+
+// SyncThread сверяет чат с Notion: подтягивает полную историю и говорит, идёт ли
+// там генерация. Без этого чат, открытый после обрыва потока или созданный
+// в веб-версии, выглядел пустым и «остановившимся».
+func (a *App) SyncThread(threadID string) (ThreadSyncResult, error) {
+	result := ThreadSyncResult{Messages: []store.Message{}}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return result, nil
+	}
+	if a.runtime.IsRunning(threadID) {
+		// Свой живой стрим трогать нельзя: UI сам рисует дельты.
+		result.Running, result.Streaming, result.Found = true, true, true
+		messages, err := a.db.LoadMessages(threadID)
+		if len(messages) > 0 {
+			result.Messages = messages
+		}
+		return result, err
+	}
+
+	state, err := a.runtime.ThreadState(a.ctx, threadID)
+	if err != nil {
+		// Нет сети или сессии — отдаём то, что уже есть локально.
+		if messages, dbErr := a.db.LoadMessages(threadID); dbErr == nil && len(messages) > 0 {
+			result.Messages = messages
+		}
+		return result, err
+	}
+
+	result.Found = state.Found
+	result.Running = state.Running
+	result.Title = state.Title
+
+	if len(state.Turns) == 0 {
+		if messages, dbErr := a.db.LoadMessages(threadID); dbErr == nil && len(messages) > 0 {
+			result.Messages = messages
+		}
+		return result, nil
+	}
+
+	spaceID := a.activeSpace()
+	_ = a.db.EnsureThread(threadID, state.Title, spaceID)
+	_ = a.db.AdoptThread(threadID, spaceID)
+
+	// Порядок реплик берём из Notion, а метки времени делаем строго
+	// возрастающими: история читается именно по created_at.
+	messages := make([]store.Message, 0, len(state.Turns))
+	previous := int64(0)
+	for index, turn := range state.Turns {
+		createdAt := turn.CreatedAt
+		if createdAt <= previous {
+			createdAt = previous + 1
+		}
+		if createdAt == 0 {
+			createdAt = time.Now().UnixMilli() - int64(len(state.Turns)-index)
+		}
+		previous = createdAt
+		parts, marshalErr := json.Marshal(turn.Parts)
+		if marshalErr != nil {
+			parts = []byte("[]")
+		}
+		messages = append(messages, store.Message{
+			ID: turn.ID, ThreadID: threadID, Role: turn.Role,
+			Content: turn.Content, Parts: string(parts), CreatedAt: createdAt,
+		})
+	}
+	if err := a.db.ReplaceMessages(threadID, messages); err != nil {
+		return result, err
+	}
+	if state.Title != "" {
+		_ = a.db.RenameThread(threadID, state.Title)
+	}
+	result.Messages = messages
+	return result, nil
+}
+
+// RunningThreads — чаты, стрим которых живёт в приложении прямо сейчас.
+func (a *App) RunningThreads() []string { return a.runtime.RunningConversations() }
 
 func (a *App) TrimThreadFrom(threadID, messageID string) error {
 	return a.db.DeleteMessagesFrom(threadID, messageID)

@@ -214,6 +214,61 @@ ON CONFLICT(id) DO UPDATE SET content=excluded.content, parts=excluded.parts`,
 	return s.TouchThread(message.ThreadID)
 }
 
+// EnsureThread создаёт строку чата, если его ещё нет локально: чат может
+// прийти из Notion (веб-версия, другое устройство) раньше, чем его сообщения.
+func (s *Store) EnsureThread(id, title, spaceID string) error {
+	if id == "" {
+		return errors.New("не указан чат")
+	}
+	_, err := s.db.Exec(
+		`INSERT INTO threads (id,title,space_id,created_at,updated_at) VALUES (?,?,?,?,?)
+ON CONFLICT(id) DO NOTHING`,
+		id, title, spaceID, now(), now(),
+	)
+	return err
+}
+
+// ReplaceMessages перезаписывает историю чата целиком. Нужно для сверки с
+// Notion: там транскрипт — источник правды, а дозапись плодила бы дубли
+// одного и того же ответа под разными id.
+func (s *Store) ReplaceMessages(threadID string, messages []Message) error {
+	if threadID == "" {
+		return errors.New("не указан чат")
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM messages WHERE thread_id=?`, threadID); err != nil {
+		return err
+	}
+	stmt, err := tx.Prepare(
+		`INSERT INTO messages (id,thread_id,role,content,parts,created_at) VALUES (?,?,?,?,?,?)
+ON CONFLICT(id) DO UPDATE SET content=excluded.content, parts=excluded.parts, created_at=excluded.created_at`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, message := range messages {
+		if message.ID == "" {
+			message.ID = uid.New()
+		}
+		if message.Parts == "" || !json.Valid([]byte(message.Parts)) {
+			message.Parts = "[]"
+		}
+		if message.CreatedAt == 0 {
+			message.CreatedAt = now()
+		}
+		if _, err := stmt.Exec(
+			message.ID, threadID, message.Role, message.Content, message.Parts, message.CreatedAt,
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func (s *Store) LoadMessages(threadID string) ([]Message, error) {
 	rows, err := s.db.Query(`SELECT id,thread_id,role,content,parts,created_at FROM messages WHERE thread_id=? ORDER BY created_at`, threadID)
 	if err != nil {

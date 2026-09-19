@@ -6,6 +6,7 @@ import type {
 	Model,
 	Part,
 	Settings,
+	StoredMessage,
 	Thread,
 	ToolPart,
 	Turn,
@@ -111,6 +112,18 @@ function parseParts(raw: string | undefined, content: string): Part[] {
 	return content ? [{ kind: "text", text: content }] : []
 }
 
+/** История из SQLite/Notion → реплики для рендера. */
+function toTurns(messages: StoredMessage[] | null | undefined): Turn[] {
+	return (messages ?? []).map((m) => ({
+		id: m.id,
+		role: m.role,
+		content: m.content,
+		parts: parseParts(m.parts, m.content),
+		createdAt: m.createdAt,
+		streaming: false,
+	}))
+}
+
 type RevealState = {
 	queue: string
 	raf: number
@@ -167,6 +180,9 @@ export default function App() {
 	const turnsRef = useRef<Turn[]>([])
 	const threadCache = useRef(new Map<string, Turn[]>())
 	const openSequence = useRef(0)
+	// Таймеры опроса чатов, которые генерируются в Notion без нашего стрима.
+	const remoteWatchers = useRef(new Map<string, number>())
+	const syncing = useRef(new Set<string>())
 	// Входящие NDJSON-дельты могут быть огромными. Держим отдельную очередь на
 	// каждый параллельный чат и проявляем её короткими порциями, а не вставляем
 	// в DOM одним блоком.
@@ -457,25 +473,103 @@ export default function App() {
 		setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 64)
 	}
 
+	// ---- сверка с Notion ------------------------------------------------
+	// Открытие чата, возврат в окно и конец ответа проверяют настоящее
+	// состояние чата в Notion: история берётся из транскрипта, а не только из
+	// локальной базы, и видно, что модель всё ещё пишет.
+	function stopWatchingRemote(id: string) {
+		const timer = remoteWatchers.current.get(id)
+		if (timer !== undefined) {
+			window.clearTimeout(timer)
+			remoteWatchers.current.delete(id)
+		}
+	}
+
+	function watchRemote(id: string) {
+		if (remoteWatchers.current.has(id)) return
+		const timer = window.setTimeout(() => {
+			remoteWatchers.current.delete(id)
+			void syncThread(id)
+		}, 4000)
+		remoteWatchers.current.set(id, timer)
+	}
+
+	async function syncThread(id: string) {
+		if (!id || syncing.current.has(id)) return
+		syncing.current.add(id)
+		try {
+			const state = await api.syncThread(id)
+			if (!state) return
+			if (state.streaming) {
+				// Свой живой стрим рисует ответ сам — ничего не перезаписываем.
+				markRunning(id, true)
+				return
+			}
+			const loaded = toTurns(state.messages)
+			if (loaded.length > 0) {
+				if (state.running) {
+					const last = loaded[loaded.length - 1]
+					if (last.role === "assistant") last.streaming = true
+				}
+				threadCache.current.set(id, loaded)
+				if (threadIdRef.current === id) {
+					turnsRef.current = loaded
+					setTurns(loaded)
+				}
+			}
+			if (state.title) {
+				setThreads((prev) => prev.map((t) => (t.id === id ? { ...t, title: state.title } : t)))
+			}
+			markRunning(id, state.running)
+			if (state.running) watchRemote(id)
+			else stopWatchingRemote(id)
+		} catch {
+			/* офлайн или нет сессии — остаёмся на локальной истории */
+		} finally {
+			syncing.current.delete(id)
+		}
+	}
+
+	// Возврат в окно и фоновый такт подтягивают состояние открытого чата.
+	useEffect(() => {
+		const resync = () => {
+			if (document.visibilityState === "hidden") return
+			const id = threadIdRef.current
+			if (id) void syncThread(id)
+		}
+		window.addEventListener("focus", resync)
+		document.addEventListener("visibilitychange", resync)
+		const beat = window.setInterval(resync, 20000)
+		return () => {
+			window.removeEventListener("focus", resync)
+			document.removeEventListener("visibilitychange", resync)
+			window.clearInterval(beat)
+			for (const timer of remoteWatchers.current.values()) window.clearTimeout(timer)
+			remoteWatchers.current.clear()
+		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [])
+
 	// ---- threads ---------------------------------------------------------
 	async function openThread(id: string) {
 		const sequence = ++openSequence.current
 		if (threadIdRef.current) threadCache.current.set(threadIdRef.current, turnsRef.current)
 		threadIdRef.current = id
 		setThreadId(id)
+		// Пустой кэш больше не считается историей: раньше именно из-за этого
+		// переписка выглядела потерянной при возврате в чат.
 		const cached = threadCache.current.get(id)
-		if (cached) { turnsRef.current = cached; setTurns(cached); setAtBottom(true); return }
+		if (cached && cached.length > 0) {
+			turnsRef.current = cached
+			setTurns(cached)
+			setAtBottom(true)
+			void syncThread(id)
+			return
+		}
 		try {
 			const msgs = await api.loadThread(id)
 			if (sequence !== openSequence.current || threadIdRef.current !== id) return
-			const loaded = (msgs ?? []).map((m) => ({
-					id: m.id,
-					role: m.role,
-					content: m.content,
-					parts: parseParts(m.parts, m.content),
-					createdAt: m.createdAt,
-					streaming: false,
-				}))
+			const loaded = toTurns(msgs)
 			threadCache.current.set(id, loaded)
 			turnsRef.current = loaded
 			setTurns(loaded)
@@ -483,6 +577,9 @@ export default function App() {
 		} catch (e) {
 			notify(errText(e), true)
 		}
+		// Историю и статус добираем из Notion: чат мог идти в веб-версии
+		// или продолжаться после обрыва нашего потока.
+		void syncThread(id)
 	}
 
 	function newChat() {
@@ -689,13 +786,16 @@ export default function App() {
 				t.id === assistantTurnId ? { ...t, streaming: false } : t,
 			))
 			const done = completed.find((t) => t.id === assistantTurnId)
-			if (done) void persistTurn(tid, done)
+			if (done) await persistTurn(tid, done)
 			assistantIds.current.delete(tid)
 			streamStartedAt.current.delete(tid)
 			revealStates.current.delete(tid)
 			api.listThreads()
 				.then((l) => setThreads(l ?? []))
 				.catch(() => {})
+			// Сверка сразу после ответа: если наш поток оборвался, а Notion
+			// продолжает писать, ответ всё равно доедет до приложения.
+			void syncThread(tid)
 		}
 	}
 

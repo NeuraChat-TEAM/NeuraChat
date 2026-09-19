@@ -44,6 +44,17 @@ export type FetchedFile = {
 	signedUrl?: string
 }
 
+/** Состояние чата после сверки с Notion. */
+export type ThreadSync = {
+	/** Ответ ещё генерируется — в приложении или на стороне Notion. */
+	running: boolean
+	/** Поток идёт через это приложение — историю перезаписывать нельзя. */
+	streaming: boolean
+	found: boolean
+	title: string
+	messages: StoredMessage[] | null
+}
+
 /** Участник воркспейса. */
 export type SpaceMember = {
 	userId: string
@@ -163,6 +174,9 @@ export const api = {
 	renameThread: (id: string, title: string) => call<void>("RenameThread", id, title),
 	deleteThread: (id: string) => call<void>("DeleteThread", id),
 	loadThread: (id: string) => call<StoredMessage[]>("LoadThread", id),
+	// Сверка чата с Notion: полная история + признак живой генерации.
+	syncThread: (id: string) => call<ThreadSync>("SyncThread", id),
+	runningThreads: () => call<string[]>("RunningThreads"),
 	saveMessage: (m: StoredMessage) => call<void>("SaveMessage", m),
 	trimThreadFrom: (threadId: string, messageId: string) =>
 		call<void>("TrimThreadFrom", threadId, messageId),
@@ -218,6 +232,16 @@ export const api = {
 		autoRun?: boolean
 		runWriteToolsAutomatically?: boolean
 	}) => call<McpModule>("McpConnect", input),
+	// stdio-серверы (npx/uvx): запускает notcode, Notion видит их как /bridge/<slug>/mcp.
+	mcpInstallStdio: (input: {
+		name: string
+		command: string
+		args?: string[]
+		env?: Record<string, string>
+		cwd?: string
+		autoRun?: boolean
+		runWriteToolsAutomatically?: boolean
+	}) => call<McpModule>("McpInstallStdio", input),
 	mcpDisconnect: (integrationId: string) => call<void>("McpDisconnect", integrationId),
 	mcpSetEnabled: (integrationId: string, enabled: boolean) =>
 		call<void>("McpSetEnabled", integrationId, enabled),

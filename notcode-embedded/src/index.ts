@@ -3,6 +3,7 @@ import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolve } from "node:path";
 import { createServer, toolCount } from "@/mcp";
+import { bridgeStatus, handleBridgeRequest, loadBridges, stopAllBridges } from "@/bridge";
 import {
     CONFIG_FILE,
     ConfigError,
@@ -594,6 +595,35 @@ function startServer(config: NotCodeConfig, listen: { port: number; host: string
             set.headers["Content-Type"] = "application/json";
             return out.length === 1 ? out[0] : out;
         })
+        /**
+         * stdio-мост: локальные MCP-серверы (npx/uvx/docker) получают свой
+         * сетевой адрес внутри того же туннеля — Notion умеет подключать
+         * только HTTP-эндпоинты.
+         */
+        .post("/bridge/:slug/mcp", async ({ params, body, set }) => {
+            const result = await handleBridgeRequest(params.slug, body);
+            set.status = result.status;
+            if (result.status === 200) set.headers["Content-Type"] = "application/json";
+            return result.body;
+        })
+        .post("/bridge/:slug", async ({ params, body, set }) => {
+            const result = await handleBridgeRequest(params.slug, body);
+            set.status = result.status;
+            if (result.status === 200) set.headers["Content-Type"] = "application/json";
+            return result.body;
+        })
+        .get("/bridge", async () => ({
+            bridges: Object.entries(await loadBridges(true)).map(([slug, spec]) => ({
+                slug,
+                command: spec.command,
+                args: spec.args
+            })),
+            running: bridgeStatus()
+        }))
+        .get("/bridge/:slug/mcp", ({ set }) => {
+            set.status = 405;
+            return { error: "Method not allowed", hint: "Используй POST /bridge/<slug>/mcp" };
+        })
         // GET /mcp клиенты используют для серверных стримов: у stateless-режима их нет.
         .get("/mcp", ({ set }) => {
             set.status = 405;
@@ -839,6 +869,8 @@ function startServer(config: NotCodeConfig, listen: { port: number; host: string
         clearInterval(maintenanceTimer);
         terminals.stopGc();
         watchers.stopGc();
+        // Локальные MCP-пакеты из моста тоже гасим — иначе npx остаётся висеть.
+        stopAllBridges();
 
         // Жёсткий дедлайн: зависший дочерний процесс не должен держать сервер вечно.
         const forceExit = setTimeout(() => {

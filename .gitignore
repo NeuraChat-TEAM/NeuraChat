@@ -8,7 +8,8 @@ frontend/wailsjs/
 *.tsbuildinfo
 
 # Build artifacts
-build/bin/
+# Всю папку build/ генерит wails: и bin, и windows-ассеты.
+build/
 dist/
 out/
 *.exe
