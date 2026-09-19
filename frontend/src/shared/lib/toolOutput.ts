@@ -176,24 +176,52 @@ function baseName(path: string) {
 	return clean.split(/[\\/]/).pop() || clean
 }
 
+// Имя сервера для шапки карточки: «mcpServer_notcode» → «notcode».
+function cleanServer(raw: string) {
+	return raw
+		.replace(/^connections[._]/i, "")
+		.replace(/^(mcpServer|mcp)[._-]?/i, "")
+		.replace(/[._]/g, " ")
+		.trim()
+}
+
+// Если стрим не прислал имя сервера, угадываем его по имени инструмента.
+function guessServer(toolName: string) {
+	const normalized = toolName.replace(/[./]/g, "_").toLowerCase()
+	if (/^(fs|terminal|git|workspace|notcode|snapshot|watch)_/.test(normalized)) return "notcode"
+	if (/^computer_/.test(normalized)) return "computer"
+	if (/^notion_/.test(normalized)) return "notion"
+	if (/^system_/.test(normalized)) return "system"
+	return ""
+}
+
 function presentedTool(part: { name: string; server?: string; args?: Record<string, unknown>; done?: boolean }) {
 	let name = part.name
 	let args = part.args ?? {}
-	// Обёртки бывают вложенными: callFunction -> mcpServer.runTool -> fs_read_file.
-	// Разворачиваем до реального действия, а не останавливаемся на «runTool».
-	for (let depth = 0; depth < 4; depth++) {
-		if (/callFunction/i.test(name) && typeof args.function === "string") {
-			name = args.function.split(".").pop() || name
-			args = asRecord(args.args) ?? args
+	let server = part.server ?? ""
+	// Обёртки бывают вложенными: callFunction -> mcpServer_notcode.runTool -> fs_patch_file.
+	// Разворачиваем до реального действия и по дороге запоминаем имя сервера,
+	// чтобы в шапке было «notcode / fs_patch_file», а не «MCP / callFunction».
+	for (let depth = 0; depth < 5; depth++) {
+		if (/callfunction/i.test(name) && typeof args.function === "string") {
+			const chain = args.function.split(".").filter(Boolean)
+			if (chain.length > 1) server = chain[chain.length - 2]
+			name = chain[chain.length - 1] || name
+			const inner = asRecord(args.args)
+			if (inner) args = inner
 			continue
 		}
-		if (/runTool/i.test(name) && typeof args.toolName === "string") {
+		if (/runtool/i.test(name) && typeof args.toolName === "string") {
 			name = args.toolName
-			args = asRecord(args.toolArguments) ?? args
+			const inner = asRecord(args.toolArguments)
+			if (inner) args = inner
 			continue
 		}
 		break
 	}
+	// Имя инструмента показываем так, как он называется у сервера.
+	name = name.replace(/^connections[._]/i, "").split(".").pop() || name
+	server = cleanServer(server) || guessServer(name)
 	const normalized = name.replace(/^connections[._]/, "").replace(/[./]/g, "_").toLowerCase()
 	const path = typeof args.path === "string" ? args.path : typeof args.file_path === "string" ? args.file_path : ""
 	const dir = typeof args.dir === "string" ? args.dir : typeof args.cwd === "string" ? args.cwd : ""
@@ -213,17 +241,26 @@ function presentedTool(part: { name: string; server?: string; args?: Record<stri
 	else if (/searchusers?/.test(normalized)) action = "Найдены пользователи"
 	else if (/listtools/.test(normalized)) action = "Получен список инструментов"
 	else if (/survey|questionnaire/.test(normalized)) action = done ? "Опросник готов" : "Готовится опросник"
-	return { name, args, action }
+	// rawArgs нужны для вкладки Input: если обёртка ещё не развернулась,
+	// лучше показать исходные параметры, чем пустоту.
+	const rawArgs = part.args ?? {}
+	if (Object.keys(args).length === 0 && Object.keys(rawArgs).length > 0) args = rawArgs
+	return { name, args, action, server }
 }
 
 export function toolIdentity(part: { name: string; server?: string; args?: Record<string, unknown>; done?: boolean }) {
 	const display = presentedTool(part)
-	const raw = `${part.server ?? ""} ${display.name} ${JSON.stringify(part.args ?? {})}`.toLowerCase()
-	if (raw.includes("notcode") || /^(fs_|terminal_|git_|workspace_|notcode_)/.test(display.name)) return { source: "NotCode", mark: "N", ...display }
-	if (raw.includes("computer") || /(^|[._/])(fs|computer)([._/]|$)/.test(raw)) return { source: "Computer", mark: "C", ...display }
-	if (raw.includes("notion")) return { source: "Notion", mark: "N", ...display }
-	if (raw.includes("system")) return { source: "System", mark: "S", ...display }
-	return { source: part.server || "MCP", mark: "M", ...display }
+	// Шапка карточки = «имя сервера / имя инструмента», как в Notion.
+	const raw = `${display.server} ${display.name} ${JSON.stringify(part.args ?? {})}`.toLowerCase()
+	let source = display.server
+	if (!source) {
+		if (raw.includes("notcode")) source = "notcode"
+		else if (raw.includes("computer")) source = "computer"
+		else if (raw.includes("notion")) source = "notion"
+		else if (raw.includes("system")) source = "system"
+		else source = "mcp"
+	}
+	return { source, mark: source.slice(0, 1).toUpperCase() || "M", ...display }
 }
 
 // Опросники показываем отдельной карточкой SurveyCard, поэтому сырой

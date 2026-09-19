@@ -130,6 +130,23 @@ type RevealState = {
 	lastFrame: number
 	charsPerMs: number
 	carry: number
+	// Весь текст, который уже взят в работу (показан или в очереди).
+	// Нужен, чтобы повторно присланный сервером кусок не проявлялся второй раз.
+	seen: string
+}
+
+/**
+ * Сколько из chunk уже есть в конце seen. Возвращает только новую часть.
+ * Короткие совпадения не считаем дублем: «но но» или «и и» вполне легальны.
+ */
+function dropRepeat(seen: string, chunk: string): string {
+	if (!chunk) return ""
+	if (chunk.length >= 8 && seen.endsWith(chunk)) return ""
+	const max = Math.min(chunk.length, seen.length)
+	for (let k = max; k >= 16; k--) {
+		if (seen.endsWith(chunk.slice(0, k))) return chunk.slice(k)
+	}
+	return chunk
 }
 
 export default function App() {
@@ -288,44 +305,53 @@ export default function App() {
 			// модель долго думала до первой дельты, используем это время как темп,
 			// но ограничиваем его, чтобы ответ не тянулся бесконечно.
 			const waited = Date.now() - (streamStartedAt.current.get(targetThreadId) ?? Date.now())
-			const targetMs = Math.min(1500, Math.max(900, waited || 1200))
+			const targetMs = Math.min(1800, Math.max(1100, waited || 1300))
 			state = {
 				queue: "",
+				seen: "",
 				raf: 0,
 				lastFrame: performance.now(),
-				charsPerMs: Math.min(1.2, Math.max(0.08, chunk.length / targetMs)),
+				// Первый блок проявляется целиком за targetMs, но не быстрее ~0.6
+				// символа за миллисекунду — иначе побуквенности уже не видно.
+				charsPerMs: Math.min(0.6, Math.max(0.05, chunk.length / targetMs)),
 				carry: 0,
 			}
 			revealStates.current.set(targetThreadId, state)
 		}
-		state.queue += chunk
+		// Защита от рассинхрона: Notion иногда присылает уже показанный кусок
+		// текста ещё раз (синхронизация снимка) — второй раз не проявляем.
+		const fresh = dropRepeat(state.seen, chunk)
+		if (!fresh) return
+		state.seen = (state.seen + fresh).slice(-4000)
+		state.queue += fresh
 		if (state.raf) return
 
 		const tick = (now: number) => {
 			const current = revealStates.current.get(targetThreadId)
 			if (!current) return
 			const elapsed = Math.min(80, now - current.lastFrame)
-			// 30 FPS достаточно для мягкого проявления и не заставляет Markdown
-			// полностью переразбираться на каждом кадре монитора.
-			if (elapsed < 28) {
+			// ~45 FPS: буквы выходят заметно плавнее, но Markdown всё ещё не
+			// переразбирается на каждом кадре монитора.
+			if (elapsed < 22) {
 				current.raf = requestAnimationFrame(tick)
 				return
 			}
 			current.lastFrame = now
-			const backlogBoost = Math.min(3, 1 + current.queue.length / 1800)
+			// Если модель прислала гигантский кусок, темп подрастает, но плавно:
+			// текст всё равно проявляется побуквенно, а не мгновенно.
+			const backlogBoost = Math.min(4, 1 + current.queue.length / 2200)
 			const budget = current.carry + elapsed * current.charsPerMs * backlogBoost
 			let take = Math.floor(budget)
 			current.carry = budget - take
 			if (take > 0 && current.queue) {
 				take = Math.min(current.queue.length, Math.max(1, take))
-				// Проявляем целыми словами, а не побуквенно: дотягиваемся до
-				// ближайшей границы слова/строки, иначе выглядит как typewriter.
+				// Проявляем посимвольно: хвост с градиентом и блюром рисует CSS,
+				// поэтому «рубленого» typewriter-эффекта не видно.
+				// Markdown-разметку (**, ```, теги) проскакиваем целиком, иначе в
+				// кадре мелькают звёздочки и половинки тегов.
 				if (take < current.queue.length) {
-					const limit = Math.min(current.queue.length, take + 24)
-					let boundary = take
-					while (boundary < limit && !/[\s.,;:!?)\]}—–"'`]/.test(current.queue[boundary])) boundary++
-					while (boundary < current.queue.length && /\s/.test(current.queue[boundary])) boundary++
-					take = boundary
+					const limit = Math.min(current.queue.length, take + 48)
+					while (take < limit && /[*_~`<>[\]()|#\\]/.test(current.queue[take])) take++
 				}
 				// Не режем surrogate pair посередине.
 				if (take < current.queue.length && /[\uD800-\uDBFF]/.test(current.queue[take - 1])) take++
@@ -680,6 +706,21 @@ export default function App() {
 	}
 
 	// override нужен для ответов из опросника: текст приходит не из инпута.
+	// Ответ на ask-survey: сначала пробуем штатный user.input_response — тогда
+	// агент продолжает текущий ход. Если ход уже закрыт, шлём обычным сообщением.
+	async function answerSurvey(answer: string, content?: Record<string, unknown>) {
+		const tid = threadIdRef.current
+		if (tid && content && Object.keys(content).length > 0) {
+			try {
+				const delivered = await api.sendSurveyAnswer(tid, "ask-survey", content)
+				if (delivered) return
+			} catch {
+				/* падаем на обычное сообщение */
+			}
+		}
+		await send([], answer)
+	}
+
 	async function send(files: Attachment[] = [], override?: string) {
 		let text = (override ?? input).trim()
 		if (!text && files.length === 0) return
@@ -957,7 +998,7 @@ export default function App() {
 												activeFile={activeFile}
 												onOpenArtifact={setArtifact}
 												onOpenFile={(file) => void openFile(file)}
-												onSurveyAnswer={(answer) => void send([], answer)}
+												onSurveyAnswer={(answer, content) => void answerSurvey(answer, content)}
 											/>
 										)}
 									</div>

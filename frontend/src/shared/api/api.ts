@@ -163,6 +163,13 @@ export const api = {
 	// Содержимое файла из шага computer-file — для предпросмотра и скачивания.
 	fetchAttachment: (fileUrl: string, fileName: string) =>
 		call<FetchedFile>("FetchAttachment", fileUrl, fileName),
+	// Структурный ответ на ask-survey. false — агент больше не ждёт ввод,
+	// тогда ответ уходит обычным сообщением.
+	sendSurveyAnswer: (
+		conversationId: string,
+		toolName: string,
+		content: Record<string, unknown>,
+	) => call<boolean>("SendSurveyAnswer", conversationId, toolName, content),
 	stopInference: (threadId: string) => call<void>("StopInference", threadId),
 	listModels: () => call<Model[]>("ListModels"),
 

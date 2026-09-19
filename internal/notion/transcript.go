@@ -27,7 +27,12 @@ type Event struct {
 
 // part is one projected piece of the assistant turn.
 type part struct {
-	kind   string // text | thinking | tool_use
+	kind string // text | thinking | tool_use
+	// key — стабильный идентификатор части между кадрами стрима.
+	// Сравнение по порядковому номеру ломалось, как только Notion
+	// вставлял шаг инструмента перед текстом: индексы съезжали и весь
+	// абзац уходил в UI заново.
+	key    string
 	id     string
 	name   string
 	server string
@@ -51,10 +56,14 @@ type Accumulator struct {
 func NewAccumulator() *Accumulator { return &Accumulator{} }
 
 // Reset installs a fresh snapshot (patch-start / patch-sync).
+//
+// ВАЖНО: снимок НЕ обнуляет уже отданный в UI текст. Notion присылает
+// patch-sync посередине ответа с полным текущим состоянием хода, и раньше
+// prev = nil заставлял выплюнуть весь текст заново — именно отсюда брались
+// «откаты на предложение назад» и повторные проигрывания анимации.
 func (a *Accumulator) Reset(snapshot interface{}) []Event {
 	steps, _ := snapshot.([]interface{})
 	a.steps = steps
-	a.prev = nil
 	return a.diff()
 }
 
@@ -246,6 +255,19 @@ func (a *Accumulator) project() []part {
 			parts[i].done = true
 		}
 	}
+
+	// Стабильные ключи: инструмент — по id, текст/рассуждение — по номеру
+	// среди частей того же вида. Такой ключ не сбивается, когда Notion
+	// добавляет или переставляет шаги в середине хода.
+	counts := map[string]int{}
+	for i := range parts {
+		if parts[i].kind == "tool_use" && parts[i].id != "" {
+			parts[i].key = "tool:" + parts[i].id
+			continue
+		}
+		counts[parts[i].kind]++
+		parts[i].key = parts[i].kind + ":" + strconv.Itoa(counts[parts[i].kind])
+	}
 	return parts
 }
 
@@ -281,6 +303,18 @@ func extractToolArgsDepth(node map[string]interface{}, depth int) map[string]int
 			}
 		}
 	}
+	// Notion кладёт аргументы tool_use JSON-строкой в поле content — именно
+	// так приходят и callFunction, и ask-survey. Без разбора этой строки
+	// вкладка Input оставалась пустой, а опросник не находил questions.
+	if kind, _ := node["type"].(string); kind == "tool_use" {
+		if text, ok := node["content"].(string); ok && strings.TrimSpace(text) != "" {
+			var args map[string]interface{}
+			if json.Unmarshal([]byte(text), &args) == nil && len(args) > 0 {
+				return args
+			}
+		}
+	}
+
 	// Некоторые версии стрима кладут вызов глубже: value.toolUse.input.
 	for _, key := range []string{"value", "toolUse", "toolCall", "request", "call", "data", "content"} {
 		switch nested := node[key].(type) {
@@ -357,23 +391,41 @@ func stringField(node map[string]interface{}, keys ...string) (string, bool) {
 	return "", false
 }
 
+// addedTail возвращает только то, что реально добавилось в конец текста.
+// Назад мы не откатываемся никогда: если снимок короче уже показанного,
+// событий нет.
+func addedTail(before, current string) string {
+	if before == "" {
+		return current
+	}
+	if strings.HasPrefix(current, before) {
+		return current[len(before):]
+	}
+	if len(current) <= len(before) {
+		return ""
+	}
+	shared := 0
+	for shared < len(before) && shared < len(current) && before[shared] == current[shared] {
+		shared++
+	}
+	return current[shared:]
+}
+
 // diff emits only what changed since the previous projection.
 func (a *Accumulator) diff() []Event {
 	next := a.project()
+	seen := make(map[string]part, len(a.prev))
+	for _, item := range a.prev {
+		seen[item.key] = item
+	}
 	var events []Event
 
-	for i, current := range next {
-		var before part
-		if i < len(a.prev) {
-			before = a.prev[i]
-		}
+	for _, current := range next {
+		before := seen[current.key]
 
 		switch current.kind {
 		case "text", "thinking":
-			delta := current.text
-			if before.kind == current.kind && strings.HasPrefix(current.text, before.text) {
-				delta = current.text[len(before.text):]
-			}
+			delta := addedTail(before.text, current.text)
 			if delta == "" {
 				continue
 			}
@@ -383,7 +435,7 @@ func (a *Accumulator) diff() []Event {
 				events = append(events, Event{Type: "reasoning-delta", Delta: delta})
 			}
 		case "tool_use":
-			if before.kind != "tool_use" || before.id != current.id {
+			if before.kind != "tool_use" {
 				events = append(events, Event{
 					Type: "tool-call", ID: current.id, Name: current.name,
 					Server: current.server, Args: current.args,
@@ -400,8 +452,37 @@ func (a *Accumulator) diff() []Event {
 		}
 	}
 
-	a.prev = next
+	a.prev = mergeParts(a.prev, next)
 	return events
+}
+
+// mergeParts хранит максимум уже отданного в UI. Если очередной снимок
+// пришёл обрезанным (так бывает на patch-sync), мы не забываем старый хвост
+// и потому не присылаем его второй раз.
+func mergeParts(prev, next []part) []part {
+	index := make(map[string]int, len(next))
+	merged := make([]part, 0, len(next)+len(prev))
+	for _, item := range next {
+		index[item.key] = len(merged)
+		merged = append(merged, item)
+	}
+	for _, old := range prev {
+		at, ok := index[old.key]
+		if !ok {
+			merged = append(merged, old)
+			continue
+		}
+		if len(old.text) > len(merged[at].text) && strings.HasPrefix(old.text, merged[at].text) {
+			merged[at].text = old.text
+		}
+		if old.done && !merged[at].done {
+			merged[at].done = true
+			if merged[at].result == nil {
+				merged[at].result = old.result
+			}
+		}
+	}
+	return merged
 }
 
 func sameJSON(a, b interface{}) bool {

@@ -23,6 +23,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -356,28 +357,35 @@ func (r *Runtime) FetchAttachment(ctx context.Context, fileURL, fileName string)
 		fileName = parts[len(parts)-1]
 	}
 
-	direct := fileURL
-	if !strings.HasPrefix(fileURL, "http") {
-		signed, err := r.client.PostJSON(ctx, signedURLsPath, map[string]interface{}{
-			"urls": []interface{}{map[string]interface{}{
-				"url":              fileURL,
-				"permissionRecord": map[string]interface{}{"table": "space", "id": cfg.SpaceID},
-			}},
-		})
-		if err != nil {
-			return out, err
-		}
-		if link := firstSignedURL(signed); link != "" {
-			direct = link
-		}
-		if !strings.HasPrefix(direct, "http") {
-			return out, fmt.Errorf("Notion не выдал ссылку на файл %s", fileName)
-		}
-	}
-
-	data, contentType, err := r.client.getBytes(ctx, direct)
+	// Notion выдаёт подписанную ссылку почти на любой запрос, но валидной
+	// оказывается только та, что подписана под «правильным» thread'ом —
+	// остальные отдают 403 уже на самом скачивании. Поэтому собираем все
+	// варианты и качаем первый, который реально открылся.
+	links, err := r.resolveFileURLs(ctx, cfg, fileURL, fileName)
 	if err != nil {
 		return out, err
+	}
+
+	var (
+		data        []byte
+		contentType string
+		direct      string
+		lastErr     error
+	)
+	for _, link := range links {
+		body, ctype, getErr := r.client.getBytes(ctx, link)
+		if getErr != nil {
+			lastErr = getErr
+			continue
+		}
+		data, contentType, direct, lastErr = body, ctype, link, nil
+		break
+	}
+	if lastErr != nil {
+		return out, lastErr
+	}
+	if direct == "" {
+		return out, fmt.Errorf("Notion не выдал ссылку на файл %s", fileName)
 	}
 
 	out = FileContent{
@@ -393,6 +401,124 @@ func (r *Runtime) FetchAttachment(ctx context.Context, fileURL, fileName string)
 		out.DataBase64 = base64.StdEncoding.EncodeToString(data)
 	}
 	return out, nil
+}
+
+// Файлы ассистента (artifact / computer-file) подписываются ТОЛЬКО под
+// permissionRecord своего thread'а — с пойнтером space Notion отвечает
+// пустым списком, и раньше это выглядело как «Notion не выдал ссылку на файл».
+const fileContentURLPath = "/api/v3/getFileContentURLForAgentThread"
+
+// attachmentFileID достаёт uuid из ссылки attachment:<fileId>:<name>.
+func attachmentFileID(ref string) string {
+	if !strings.HasPrefix(ref, "attachment:") {
+		return ""
+	}
+	parts := strings.Split(ref, ":")
+	if len(parts) < 3 {
+		return ""
+	}
+	return strings.TrimSpace(parts[1])
+}
+
+// threadPointers — все известные thread'ы (свежие первыми). Файл мог быть
+// создан в любом из открытых чатов, поэтому перебираем их по очереди.
+func (r *Runtime) threadPointers(fallbackSpace string) []map[string]string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	type row struct {
+		id, space string
+		at        time.Time
+	}
+	rows := make([]row, 0, len(r.convos))
+	for _, convo := range r.convos {
+		if strings.TrimSpace(convo.ThreadID) == "" {
+			continue
+		}
+		space := convo.SpaceID
+		if strings.TrimSpace(space) == "" {
+			space = fallbackSpace
+		}
+		rows = append(rows, row{id: convo.ThreadID, space: space, at: convo.LastUpdated})
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].at.After(rows[j].at) })
+	out := make([]map[string]string, 0, len(rows))
+	for _, item := range rows {
+		out = append(out, map[string]string{"id": item.id, "spaceId": item.space})
+	}
+	return out
+}
+
+// resolveFileURL повторяет цепочку веб-клиента из HAR:
+//  1. getFileContentURLForAgentThread (spaceId + threadId + fileId) — основной путь;
+//  2. getSignedFileUrls с permissionRecord на thread;
+//  3. как последний шанс — permissionRecord на space.
+func (r *Runtime) resolveFileURLs(ctx context.Context, cfg *Config, fileURL, fileName string) ([]string, error) {
+	if strings.HasPrefix(fileURL, "http") {
+		return []string{fileURL}, nil
+	}
+	pointers := r.threadPointers(cfg.SpaceID)
+
+	var links []string
+	add := func(link string) {
+		if !strings.HasPrefix(link, "http") {
+			return
+		}
+		for _, have := range links {
+			if have == link {
+				return
+			}
+		}
+		links = append(links, link)
+	}
+
+	if fileID := attachmentFileID(fileURL); fileID != "" {
+		for _, pointer := range pointers {
+			got, err := r.client.PostJSON(ctx, fileContentURLPath, map[string]interface{}{
+				"spaceId":             pointer["spaceId"],
+				"threadId":            pointer["id"],
+				"fileId":              fileID,
+				"includeFileMetadata": true,
+			})
+			if err != nil {
+				continue
+			}
+			for _, field := range []string{"url", "signedUrl", "fileUrl"} {
+				link, _ := got[field].(string)
+				add(link)
+			}
+		}
+	}
+
+	requests := make([]interface{}, 0, len(pointers)+1)
+	for _, pointer := range pointers {
+		requests = append(requests, map[string]interface{}{
+			"url":          fileURL,
+			"download":     false,
+			"downloadName": fileName,
+			"permissionRecord": map[string]interface{}{
+				"table": "thread", "id": pointer["id"], "spaceId": pointer["spaceId"],
+			},
+		})
+	}
+	requests = append(requests, map[string]interface{}{
+		"url":              fileURL,
+		"download":         false,
+		"downloadName":     fileName,
+		"permissionRecord": map[string]interface{}{"table": "space", "id": cfg.SpaceID},
+	})
+	for _, request := range requests {
+		signed, err := r.client.PostJSON(ctx, signedURLsPath, map[string]interface{}{
+			"urls": []interface{}{request},
+		})
+		if err != nil {
+			continue
+		}
+		add(firstSignedURL(signed))
+	}
+	if len(links) == 0 {
+		return nil, fmt.Errorf("Notion не выдал ссылку на файл %s", fileName)
+	}
+	return links, nil
 }
 
 // firstSignedURL достаёт первую http-ссылку из ответа getSignedFileUrls.
@@ -422,8 +548,20 @@ func firstSignedURL(payload map[string]interface{}) string {
 	return ""
 }
 
-// getBytes — простой GET с cookie-заголовками Notion (для S3 они безвредны).
+// getBytes скачивает файл. Подписанная ссылка Notion иногда требует
+// cookie-сессию (file.notion.so), а иногда, наоборот, ломается от лишних
+// заголовков (presigned S3 отвечает 403). Поэтому пробуем оба варианта.
 func (c *Client) getBytes(ctx context.Context, url string) ([]byte, string, error) {
+	withHeaders := strings.Contains(url, "notion.so") || strings.Contains(url, "notion.com") ||
+		strings.Contains(url, "notion.site")
+	data, ctype, err := c.getBytesOnce(ctx, url, withHeaders)
+	if err == nil {
+		return data, ctype, nil
+	}
+	return c.getBytesOnce(ctx, url, !withHeaders)
+}
+
+func (c *Client) getBytesOnce(ctx context.Context, url string, sendHeaders bool) ([]byte, string, error) {
 	cfg, err := c.require()
 	if err != nil {
 		return nil, "", err
@@ -434,7 +572,7 @@ func (c *Client) getBytes(ctx context.Context, url string) ([]byte, string, erro
 		c.finishDebug(entry, err)
 		return nil, "", err
 	}
-	if strings.Contains(url, "notion") {
+	if sendHeaders {
 		for name, value := range cfg.Headers {
 			if blockedHeaders[strings.ToLower(name)] {
 				continue

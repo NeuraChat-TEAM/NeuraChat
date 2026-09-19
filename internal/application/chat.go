@@ -95,6 +95,16 @@ func (a *App) FetchAttachment(fileURL, fileName string) (notion.FileContent, err
 	return a.runtime.FetchAttachment(a.ctx, fileURL, fileName)
 }
 
+// SendSurveyAnswer отвечает на ask-survey структурным событием user.input_response.
+// false означает «агент больше не ждёт ввод» — UI отправляет ответ обычным
+// сообщением в чат.
+func (a *App) SendSurveyAnswer(
+	conversationID, toolName string,
+	content map[string]interface{},
+) (bool, error) {
+	return a.runtime.AnswerSurvey(a.ctx, conversationID, toolName, content, "accept")
+}
+
 func (a *App) StopInference(threadID string) error {
 	return a.runtime.Stop(a.ctx, threadID)
 }

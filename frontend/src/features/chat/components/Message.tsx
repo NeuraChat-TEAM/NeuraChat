@@ -127,6 +127,11 @@ function ToolCard({
 	const args = identity.args
 	const argRows = summarizeToolArgs(args)
 	const hasArgs = argRows.length > 0
+	// Если разобрать параметры не удалось, Input всё равно показываем сырым JSON:
+	// пользователю важно видеть, какая именно команда ушла в инструмент.
+	const rawArgs = useMemo(() => {
+		try { return JSON.stringify(args ?? {}, null, 2) } catch { return "" }
+	}, [args])
 	// Результат разбираем: подписи шага, файлы, текстовый вывод.
 	const parsed = useMemo(() => parseToolResult(part.result), [part.result])
 
@@ -144,7 +149,6 @@ function ToolCard({
 				<span className={cn("min-w-0 truncate font-medium", !part.done && "shimmer")}>
 					{identity.source} / {identity.name}
 				</span>
-				<span className="text-muted-foreground hidden truncate text-xs sm:inline">· {identity.action}</span>
 				{!part.done ? (
 					<span className="tool-status" title="подключается…" aria-label="подключается">
 						<span className="tool-status__ring" />
@@ -191,14 +195,14 @@ function ToolCard({
 
 			{open ? (
 				<div className="tool-expand bg-card mt-2 rounded-[10px] border p-2 shadow-xs">
-					<Tabs defaultValue={hasArgs ? "input" : "response"}>
+					<Tabs defaultValue="input">
 						<TabsList>
-							{hasArgs ? <TabsTrigger value="input">Input</TabsTrigger> : null}
+							<TabsTrigger value="input">Input</TabsTrigger>
 							<TabsTrigger value="response">Response</TabsTrigger>
 						</TabsList>
 
-						{hasArgs ? (
-							<TabsContent value="input" className="pt-3">
+						<TabsContent value="input" className="pt-3">
+							{hasArgs ? (
 								<div className="grid grid-cols-[auto_1fr] items-baseline gap-x-4 gap-y-2">
 									{argRows.map((row) => (
 										<div key={row.key} className="contents">
@@ -210,8 +214,14 @@ function ToolCard({
 										</div>
 									))}
 								</div>
-							</TabsContent>
-						) : null}
+							) : rawArgs && rawArgs !== "{}" ? (
+								<pre className="bg-accent/40 max-h-[320px] min-w-0 overflow-auto rounded-md p-2 font-mono text-[12px] leading-[1.45] whitespace-pre-wrap">
+									{rawArgs}
+								</pre>
+							) : (
+								<p className="text-muted-foreground text-[13px]">Без параметров</p>
+							)}
+						</TabsContent>
 
 						<TabsContent value="response" className="pt-3">
 							{!part.done ? (
@@ -315,8 +325,11 @@ function surveysFromTools(parts: Part[]) {
 	const out: Survey[] = []
 	parts.forEach((part, index) => {
 		if (part.kind !== "tool") return
-		if (!/survey/i.test(part.name)) return
-		const args = (part.args ?? {}) as {
+		// Имя может прийти обёрткой (callFunction → ask-survey), поэтому
+		// смотрим и на развёрнутое имя, и на сырое.
+		const identity = toolIdentity(part)
+		if (!/survey|questionnaire/i.test(`${part.name} ${identity.name}`)) return
+		const args = (identity.args ?? part.args ?? {}) as {
 			questions?: Array<{
 				id?: string
 				prompt?: string
@@ -363,7 +376,7 @@ export function AssistantMessage({
 	activeFile?: string
 	onOpenArtifact?: (a: Artifact) => void
 	onOpenFile?: (file: ComputerFile) => void
-	onSurveyAnswer?: (answer: string) => void
+	onSurveyAnswer?: (answer: string, content?: Record<string, unknown>) => void
 }) {
 	// Шаги с опросниками не показываем сырым JSON — ниже будет SurveyCard.
 	const steps = turn.parts.filter(
@@ -486,10 +499,11 @@ export function AssistantMessage({
 			) : null}
 
 			{answer ? (
-				// Во время стрима меняется только прозрачный хвост. Entrance-анимация
-				// снята: при переразборе Markdown она заставляла весь ответ мерцать заново.
+				// Во время стрима меняется только хвост: последние буквы уходят в
+				// прозрачность, блюр и затемнение. Entrance-анимации нет — при
+				// переразборе Markdown она заставляла весь ответ мерцать заново.
 				<div className={cn(turn.streaming && "answer-reveal--live")}>
-					<Markdown text={answer} />
+					<Markdown text={answer} live={turn.streaming} />
 				</div>
 			) : null}
 
@@ -497,8 +511,10 @@ export function AssistantMessage({
 				<SurveyCard
 					key={s.id}
 					survey={s}
-					disabled={turn.streaming || !onSurveyAnswer}
-					onSubmit={(answer) => onSurveyAnswer?.(answer)}
+					// Опросник приходит в конце хода и ждёт ответа: блокируем его
+					// только когда отвечать реально некуда.
+					disabled={!onSurveyAnswer}
+					onSubmit={(answer, content) => onSurveyAnswer?.(answer, content)}
 				/>
 			))}
 

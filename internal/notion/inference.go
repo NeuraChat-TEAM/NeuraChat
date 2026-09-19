@@ -56,6 +56,9 @@ type conversation struct {
 	Started        bool
 	UserSteps      []userStep
 	LastUpdated    time.Time
+	// Pending — последний запрос агента на ввод (ask-survey и другие
+	// user.input_request): без него ответ на опросник некуда адресовать.
+	Pending pendingInput
 }
 
 type userStep struct {
@@ -253,14 +256,35 @@ func (r *Runtime) Stream(ctx context.Context, req ChatRequest, emit func(Event))
 }
 
 func (r *Runtime) handleFrame(convo *conversation, acc *Accumulator, frame map[string]interface{}) []Event {
+	// Любой кадр может принести interaction_id/request_sequence — запоминаем
+	// их, чтобы ответ опросника ушёл в тот же ход агента.
+	var found pendingInput
+	notePendingInput(frame, &found, 0)
+	if found.InteractionID != "" || found.Sequence > 0 || found.ToolName != "" {
+		r.mu.Lock()
+		if found.InteractionID != "" {
+			convo.Pending.InteractionID = found.InteractionID
+		}
+		if found.Sequence > 0 {
+			convo.Pending.Sequence = found.Sequence
+		}
+		if found.ToolName != "" {
+			convo.Pending.ToolName = found.ToolName
+		}
+		r.mu.Unlock()
+	}
+
 	kind, _ := frame["type"].(string)
 	switch kind {
 	case "patch-start":
 		data, _ := frame["data"].(map[string]interface{})
 		return acc.Reset(data["s"])
 	case "patch-sync":
+		// Раньше здесь шёл transcript-reset: UI выбрасывал весь ответ и
+		// начинал проявлять его заново на каждой синхронизации. Аккумулятор
+		// теперь сам сравнивает снимок с уже показанным и отдаёт только хвост.
 		data, _ := frame["data"].(map[string]interface{})
-		return append([]Event{{Type: "transcript-reset"}}, acc.Reset(data["s"])...)
+		return acc.Reset(data["s"])
 	case "patch":
 		return acc.Apply(frame["v"])
 	case "record-map":

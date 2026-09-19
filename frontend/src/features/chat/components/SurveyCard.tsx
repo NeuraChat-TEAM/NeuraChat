@@ -16,7 +16,7 @@ export default function SurveyCard({
 }: {
 	survey: Survey
 	disabled?: boolean
-	onSubmit: (answer: string) => void
+	onSubmit: (answer: string, content?: Record<string, unknown>) => void
 }) {
 	const [picked, setPicked] = useState<string[]>([])
 	const [other, setOther] = useState("")
@@ -51,12 +51,25 @@ export default function SurveyCard({
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [survey, sent, disabled])
 
+	// content — тот же формат, что шлёт веб-клиент Notion в user.input_response:
+	// {"<questionId>": "<optionId>" | ["<optionId>"], "other:<questionId>": "текст"}.
+	function answerContent(ids: string[], free: string): Record<string, unknown> {
+		const content: Record<string, unknown> = {}
+		const values = free ? [...ids, "__other__"] : ids
+		if (values.length > 0) {
+			content[survey.id] = survey.allowMultiple ? values : values[values.length - 1]
+		}
+		if (free) content[`other:${survey.id}`] = free
+		return content
+	}
+
 	function send() {
 		const labels = survey.options.filter((o) => picked.includes(o.id)).map((o) => o.label)
-		if (other.trim()) labels.push(other.trim())
+		const free = other.trim()
+		if (free) labels.push(free)
 		if (labels.length === 0) return
 		setSent(true)
-		onSubmit(labels.join(", "))
+		onSubmit(labels.join(", "), answerContent(picked, free))
 	}
 
 	const canSend = picked.length > 0 || other.trim().length > 0
@@ -149,7 +162,7 @@ export default function SurveyCard({
 					disabled={sent || disabled}
 					onClick={() => {
 						setSent(true)
-						onSubmit("Пропустить")
+						onSubmit("Пропустить", {})
 					}}
 				>
 					Пропустить
