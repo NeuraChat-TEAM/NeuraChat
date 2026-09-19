@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 
 // Состояние раскрытия живёт вне карточек: потоковые обновления не должны
 // сворачивать уже открытый пользователем tool/thought или всю цепочку.
@@ -82,6 +82,66 @@ export function FileChip({
 				</span>
 			</span>
 		</button>
+	)
+}
+
+/**
+ * Картинка из шага показывается сразу в ответе, а не серым файловым
+ * блоком: мы тянем байты через FetchAttachment и рисуем data-URL.
+ * Клик открывает фотку на весь экран.
+ */
+export function InlineImage({
+	file,
+	onLoadFile,
+	onOpen,
+}: {
+	file: ComputerFile
+	onLoadFile?: (file: ComputerFile) => Promise<{ dataBase64?: string; contentType?: string; signedUrl?: string }>
+	onOpen?: (file: ComputerFile) => void
+}) {
+	const [src, setSrc] = useState("")
+	const [failed, setFailed] = useState("")
+
+	useEffect(() => {
+		let alive = true
+		setSrc("")
+		setFailed("")
+		if (!onLoadFile) return
+		onLoadFile(file)
+			.then((got) => {
+				if (!alive) return
+				if (got.dataBase64) {
+					setSrc(`data:${got.contentType || "image/png"};base64,${got.dataBase64}`)
+				} else if (got.signedUrl) {
+					setSrc(got.signedUrl)
+				} else {
+					setFailed("нет содержимого")
+				}
+			})
+			.catch((e: unknown) => {
+				if (alive) setFailed(e instanceof Error ? e.message : String(e))
+			})
+		return () => {
+			alive = false
+		}
+	}, [file.fileUrl, onLoadFile])
+
+	if (failed) return <FileChip file={file} onOpen={onOpen} />
+	if (!src) {
+		return (
+			<div className="bg-accent/50 h-40 w-[min(420px,100%)] animate-pulse rounded-xl border" />
+		)
+	}
+	return (
+		<figure className="image-in m-0 flex min-w-0 flex-col gap-1">
+			<img
+				src={src}
+				alt={file.fileName}
+				onClick={() => onOpen?.(file)}
+				className="max-h-[420px] w-auto max-w-full cursor-zoom-in rounded-xl border object-contain transition-transform hover:scale-[1.01]"
+			/>
+			<figcaption className="text-muted-foreground text-[11px]">{file.fileName}</figcaption>
+		</figure>
 	)
 }
 
@@ -320,8 +380,11 @@ function Thought({ id, text }: { id: string; text: string }) {
 	)
 }
 
-/** Опросники приходят шагом-инструментом ask-survey, а не текстом. */
-function surveysFromTools(parts: Part[]) {
+/**
+ * Опросники приходят шагом-инструментом ask-survey, а не текстом.
+ * Рисует их теперь инпут (SurveyComposer), поэтому функция экспортируется.
+ */
+export function surveysFromTools(parts: Part[]) {
 	const out: Survey[] = []
 	parts.forEach((part, index) => {
 		if (part.kind !== "tool") return
@@ -369,6 +432,7 @@ export function AssistantMessage({
 	activeFile,
 	onOpenArtifact,
 	onOpenFile,
+	onLoadFile,
 	onSurveyAnswer,
 }: {
 	turn: Turn
@@ -376,6 +440,8 @@ export function AssistantMessage({
 	activeFile?: string
 	onOpenArtifact?: (a: Artifact) => void
 	onOpenFile?: (file: ComputerFile) => void
+	/** Загрузка содержимого файла — нужна для показа картинок в ответе. */
+	onLoadFile?: (file: ComputerFile) => Promise<{ dataBase64?: string; contentType?: string; signedUrl?: string }>
 	onSurveyAnswer?: (answer: string, content?: Record<string, unknown>) => void
 }) {
 	// Шаги с опросниками не показываем сырым JSON — ниже будет SurveyCard.
@@ -400,8 +466,11 @@ export function AssistantMessage({
 		}
 		return [...seen.values()]
 	}, [turn.parts])
-	const toolSurveys = useMemo(() => surveysFromTools(turn.parts), [turn.parts])
-	const allSurveys = [...surveys, ...toolSurveys]
+	// Картинки показываем самими картинками, остальное — карточками файлов.
+	const stepImages = useMemo(() => stepFiles.filter((f) => isImage(f)), [stepFiles])
+	const stepDocs = useMemo(() => stepFiles.filter((f) => !isImage(f)), [stepFiles])
+	// Опросники из ```survey остались в сообщении; ask-survey уехал в инпут.
+	const allSurveys = surveys
 	const todos = useMemo(() => todosFromParts(turn.parts), [turn.parts])
 	const [open, setOpenState] = useState(() => expandedGroups.has(turn.id))
 	const setOpen = (next: boolean) => {
@@ -485,9 +554,22 @@ export function AssistantMessage({
 				/>
 			) : null}
 
-			{stepFiles.length > 0 ? (
+			{stepImages.length > 0 ? (
+				<div className="flex min-w-0 flex-col gap-2">
+					{stepImages.map((file) => (
+						<InlineImage
+							key={`img-${file.id}`}
+							file={file}
+							onLoadFile={onLoadFile}
+							onOpen={onOpenFile}
+						/>
+					))}
+				</div>
+			) : null}
+
+			{stepDocs.length > 0 ? (
 				<div className="flex min-w-0 gap-2 overflow-x-auto pb-0.5">
-					{stepFiles.map((file) => (
+					{stepDocs.map((file) => (
 						<FileChip
 							key={`top-${file.id}`}
 							file={file}

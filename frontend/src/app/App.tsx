@@ -19,7 +19,7 @@ import ArtifactPanel from "../features/artifacts/components/ArtifactPanel"
 import Composer, { type Attachment } from "../features/chat/components/Composer"
 import EmptyState from "../features/chat/components/EmptyState"
 import Onboarding from "../features/onboarding/components/Onboarding"
-import { AssistantMessage, UserMessage } from "../features/chat/components/Message"
+import { AssistantMessage, surveysFromTools, UserMessage } from "../features/chat/components/Message"
 import SettingsModal from "../features/settings/components/SettingsModal"
 import Sidebar, { SIDEBAR_DEFAULT, SIDEBAR_MAX, SIDEBAR_MIN } from "../features/navigation/components/Sidebar"
 import TitleBar from "../features/navigation/components/TitleBar"
@@ -157,6 +157,10 @@ export default function App() {
 	const [threadId, setThreadId] = useState("")
 	const [turns, setTurns] = useState<Turn[]>([])
 	const [input, setInput] = useState("")
+	// Фотка открывается на весь экран, а не в панели-браузере.
+	const [imageView, setImageView] = useState<{ name: string; src: string } | null>(null)
+	// Отвеченные опросники больше не показываем в инпуте.
+	const [answeredSurveys, setAnsweredSurveys] = useState<Set<string>>(() => new Set())
 	// Запросы отслеживаются по чатам: можно открыть новый чат и писать в нём,
 	// пока предыдущий продолжает работать в фоне.
 	const [runningThreads, setRunningThreads] = useState<Set<string>>(() => new Set())
@@ -884,7 +888,7 @@ export default function App() {
 		if (file.fileName.toLowerCase().endsWith(".zip")) {
 			// Зипы никогда не открываем — только скачиваем.
 			try {
-				const got = await api.fetchAttachment(file.fileUrl, file.fileName)
+				const got = await api.fetchAttachment(threadIdRef.current, file.fileUrl, file.fileName)
 				if (got.dataBase64) {
 					saveBase64(got.dataBase64, file.fileName, got.contentType || "application/zip")
 					notify(`Архив ${file.fileName} скачан`)
@@ -897,7 +901,12 @@ export default function App() {
 			}
 		}
 		try {
-			const got = await api.fetchAttachment(file.fileUrl, file.fileName)
+			const got = await api.fetchAttachment(threadIdRef.current, file.fileUrl, file.fileName)
+			// Картинки — сразу в лайтбокс, без панели-браузера.
+			if (got.dataBase64 && got.contentType.startsWith("image/")) {
+				setImageView({ name: file.fileName, src: `data:${got.contentType};base64,${got.dataBase64}` })
+				return
+			}
 			const dot = file.fileName.lastIndexOf(".")
 			const ext = dot > 0 ? file.fileName.slice(dot).toLowerCase() : ".txt"
 			const name = dot > 0 ? file.fileName.slice(0, dot) : file.fileName
@@ -930,6 +939,30 @@ export default function App() {
 		} catch (e) {
 			notify(errText(e), true)
 		}
+	}
+
+	/** Подтягивает байты файла для показа картинки прямо в ответе. */
+	const loadFile = useCallback(
+		(file: ComputerFile) => api.fetchAttachment(threadIdRef.current, file.fileUrl, file.fileName),
+		[],
+	)
+
+	// Опросник ask-survey из последнего завершённого ответа живёт в инпуте.
+	const lastAssistant = [...turns].reverse().find((t) => t.role === "assistant")
+	const pendingSurveys =
+		lastAssistant && !lastAssistant.streaming
+			? surveysFromTools(lastAssistant.parts).filter(
+					(s) => !answeredSurveys.has(`${lastAssistant.id}:${s.id}`),
+				)
+			: []
+
+	function closeSurveys() {
+		if (!lastAssistant) return
+		setAnsweredSurveys((prev) => {
+			const next = new Set(prev)
+			for (const s of pendingSurveys) next.add(`${lastAssistant.id}:${s.id}`)
+			return next
+		})
 	}
 
 	const isEmpty = turns.length === 0
@@ -998,6 +1031,7 @@ export default function App() {
 												activeFile={activeFile}
 												onOpenArtifact={setArtifact}
 												onOpenFile={(file) => void openFile(file)}
+												onLoadFile={loadFile}
 												onSurveyAnswer={(answer, content) => void answerSurvey(answer, content)}
 											/>
 										)}
@@ -1016,6 +1050,12 @@ export default function App() {
 						settings={settings}
 						models={models}
 						onPatchSettings={patchSettings}
+						surveys={pendingSurveys}
+						onSurveyAnswer={(result) => {
+							closeSurveys()
+							void answerSurvey(result.text, result.content)
+						}}
+						onSurveySkip={closeSurveys}
 						showScrollDown={!atBottom && !isEmpty}
 						onScrollDown={() => {
 							setAtBottom(true)
@@ -1052,6 +1092,19 @@ export default function App() {
 					onToast={notify}
 				/>
 			</div>
+
+			{imageView ? (
+				<div
+					className="lightbox-backdrop fixed inset-0 z-[70] flex items-center justify-center bg-black/80 p-8"
+					onClick={() => setImageView(null)}
+				>
+					<img
+						src={imageView.src}
+						alt={imageView.name}
+						className="lightbox-image max-h-full max-w-full cursor-zoom-out rounded-xl object-contain shadow-sheet"
+					/>
+				</div>
+			) : null}
 
 			{toast ? (
 				<div

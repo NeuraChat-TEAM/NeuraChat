@@ -91,8 +91,10 @@ func (a *App) UploadAttachment(payload UploadPayload) (notion.UploadResult, erro
 
 // FetchAttachment достаёт содержимое файла из шага computer-file,
 // чтобы показать его в правой панели-браузере или скачать.
-func (a *App) FetchAttachment(fileURL, fileName string) (notion.FileContent, error) {
-	return a.runtime.FetchAttachment(a.ctx, fileURL, fileName)
+// conversationID нужен, чтобы спрашивать ссылку в thread'е ТОГО чата,
+// где файл родился: чужой thread даёт 404 и затем 403 на скачивании.
+func (a *App) FetchAttachment(conversationID, fileURL, fileName string) (notion.FileContent, error) {
+	return a.runtime.FetchAttachment(a.ctx, conversationID, fileURL, fileName)
 }
 
 // SendSurveyAnswer отвечает на ask-survey структурным событием user.input_response.

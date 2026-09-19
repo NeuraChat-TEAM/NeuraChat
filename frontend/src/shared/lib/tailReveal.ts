@@ -66,12 +66,19 @@ export function markTail(html: string, tail: number = TAIL_CHARS): string {
 				frag.appendChild(doc.createTextNode(ch))
 				continue
 			}
+			// Пробел НИКОГДА не оборачиваем и не меняем на \u00A0: неразрывный
+			// пробел запрещал перенос в этом месте, строка пересобиралась и
+			// абзац на глазах «съезжал назад», когда хвост ехал дальше.
+			// На невидимом символе градиент всё равно не виден.
+			if (ch === " " || ch === "\t") {
+				frag.appendChild(doc.createTextNode(ch))
+				continue
+			}
 			const distance = consumed + (take - 1 - k)
 			const span = doc.createElement("span")
 			span.className = "rv"
 			span.setAttribute("style", `--d:${distance}`)
-			// Пробел в отдельном span схлопнулся бы при переносе строки.
-			span.textContent = ch === " " ? "\u00A0" : ch
+			span.textContent = ch
 			frag.appendChild(span)
 		}
 		node.parentNode?.replaceChild(frag, node)

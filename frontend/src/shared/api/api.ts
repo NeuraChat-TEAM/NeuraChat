@@ -161,8 +161,8 @@ export const api = {
 		dataBase64: string
 	}) => call<UploadedAttachment>("UploadAttachment", payload),
 	// Содержимое файла из шага computer-file — для предпросмотра и скачивания.
-	fetchAttachment: (fileUrl: string, fileName: string) =>
-		call<FetchedFile>("FetchAttachment", fileUrl, fileName),
+	fetchAttachment: (conversationId: string, fileUrl: string, fileName: string) =>
+		call<FetchedFile>("FetchAttachment", conversationId, fileUrl, fileName),
 	// Структурный ответ на ask-survey. false — агент больше не ждёт ввод,
 	// тогда ответ уходит обычным сообщением.
 	sendSurveyAnswer: (

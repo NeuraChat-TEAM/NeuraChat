@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react"
 import { ArrowUp, ChevronDown, FileText, Paperclip, Square, X } from "lucide-react"
 import type { Model, Settings } from "../../../shared/model/types"
+import type { Survey } from "../../artifacts/model/artifacts"
+import SurveyComposer, { type SurveyResult } from "./SurveyComposer"
 import { cn } from "../../../shared/lib/utils"
 import {
 	Button,
@@ -100,6 +102,9 @@ export default function Composer({
 	onPatchSettings,
 	showScrollDown,
 	onScrollDown,
+	surveys = [],
+	onSurveyAnswer,
+	onSurveySkip,
 }: {
 	value: string
 	onChange: (v: string) => void
@@ -111,6 +116,10 @@ export default function Composer({
 	onPatchSettings: (patch: Partial<Settings>) => void
 	showScrollDown: boolean
 	onScrollDown: () => void
+	/** Активный опросник — мастер рисуется прямо в инпуте. */
+	surveys?: Survey[]
+	onSurveyAnswer?: (result: SurveyResult) => void
+	onSurveySkip?: () => void
 }) {
 	const ref = useRef<HTMLTextAreaElement>(null)
 	const fileRef = useRef<HTMLInputElement>(null)
@@ -194,6 +203,15 @@ export default function Composer({
 						e.target.value = ""
 					}}
 				/>
+
+				{surveys.length > 0 && onSurveyAnswer ? (
+					<SurveyComposer
+						surveys={surveys}
+						busy={busy}
+						onSubmit={onSurveyAnswer}
+						onSkip={() => onSurveySkip?.()}
+					/>
+				) : null}
 
 				{files.length > 0 ? (
 					<div className="flex flex-wrap gap-1.5 px-1.5 pt-2">

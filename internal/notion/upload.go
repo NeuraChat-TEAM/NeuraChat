@@ -22,6 +22,7 @@ import (
 	"mime"
 	"mime/multipart"
 	"net/http"
+	neturl "net/url"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -342,7 +343,7 @@ type FileContent struct {
 // «компьютере»: сначала подписанная ссылка, затем обычный GET.
 //
 // fileURL приходит в виде attachment:<uuid>:<name> либо уже готовой https-ссылкой.
-func (r *Runtime) FetchAttachment(ctx context.Context, fileURL, fileName string) (FileContent, error) {
+func (r *Runtime) FetchAttachment(ctx context.Context, conversationID, fileURL, fileName string) (FileContent, error) {
 	var out FileContent
 	cfg, err := r.client.require()
 	if err != nil {
@@ -361,7 +362,7 @@ func (r *Runtime) FetchAttachment(ctx context.Context, fileURL, fileName string)
 	// оказывается только та, что подписана под «правильным» thread'ом —
 	// остальные отдают 403 уже на самом скачивании. Поэтому собираем все
 	// варианты и качаем первый, который реально открылся.
-	links, err := r.resolveFileURLs(ctx, cfg, fileURL, fileName)
+	links, err := r.resolveFileURLs(ctx, cfg, conversationID, fileURL, fileName)
 	if err != nil {
 		return out, err
 	}
@@ -422,7 +423,7 @@ func attachmentFileID(ref string) string {
 
 // threadPointers — все известные thread'ы (свежие первыми). Файл мог быть
 // создан в любом из открытых чатов, поэтому перебираем их по очереди.
-func (r *Runtime) threadPointers(fallbackSpace string) []map[string]string {
+func (r *Runtime) threadPointers(fallbackSpace, preferConversation string) []map[string]string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	type row struct {
@@ -430,6 +431,10 @@ func (r *Runtime) threadPointers(fallbackSpace string) []map[string]string {
 		at        time.Time
 	}
 	rows := make([]row, 0, len(r.convos))
+	preferred := ""
+	if convo, ok := r.convos[preferConversation]; ok && convo != nil {
+		preferred = strings.TrimSpace(convo.ThreadID)
+	}
 	for _, convo := range r.convos {
 		if strings.TrimSpace(convo.ThreadID) == "" {
 			continue
@@ -440,7 +445,17 @@ func (r *Runtime) threadPointers(fallbackSpace string) []map[string]string {
 		}
 		rows = append(rows, row{id: convo.ThreadID, space: space, at: convo.LastUpdated})
 	}
-	sort.Slice(rows, func(i, j int) bool { return rows[i].at.After(rows[j].at) })
+	// Файл почти всегда лежит в thread'е ТОГО чата, из которого его открывают.
+	// Пока этот thread не шёл первым, Notion отвечал 404 «Agent thread not
+	// found» на чужие/мёртвые thread'ы, а подпись под ними давала 403.
+	sort.Slice(rows, func(i, j int) bool {
+		if preferred != "" {
+			if (rows[i].id == preferred) != (rows[j].id == preferred) {
+				return rows[i].id == preferred
+			}
+		}
+		return rows[i].at.After(rows[j].at)
+	})
 	out := make([]map[string]string, 0, len(rows))
 	for _, item := range rows {
 		out = append(out, map[string]string{"id": item.id, "spaceId": item.space})
@@ -452,11 +467,11 @@ func (r *Runtime) threadPointers(fallbackSpace string) []map[string]string {
 //  1. getFileContentURLForAgentThread (spaceId + threadId + fileId) — основной путь;
 //  2. getSignedFileUrls с permissionRecord на thread;
 //  3. как последний шанс — permissionRecord на space.
-func (r *Runtime) resolveFileURLs(ctx context.Context, cfg *Config, fileURL, fileName string) ([]string, error) {
+func (r *Runtime) resolveFileURLs(ctx context.Context, cfg *Config, conversationID, fileURL, fileName string) ([]string, error) {
 	if strings.HasPrefix(fileURL, "http") {
-		return []string{fileURL}, nil
+		return []string{fileURL, artifactProxyURL(fileURL)}, nil
 	}
-	pointers := r.threadPointers(cfg.SpaceID)
+	pointers := r.threadPointers(cfg.SpaceID, conversationID)
 
 	var links []string
 	add := func(link string) {
@@ -485,6 +500,10 @@ func (r *Runtime) resolveFileURLs(ctx context.Context, cfg *Config, fileURL, fil
 			for _, field := range []string{"url", "signedUrl", "fileUrl"} {
 				link, _ := got[field].(string)
 				add(link)
+				// Веб-клиент в HAR тянет такую ссылку не напрямую, а через
+				// artifact.notionusercontent.com — этот путь живёт дольше
+				// презаписанной S3-ссылки и не отдаёт 403.
+				add(artifactProxyURL(link))
 			}
 		}
 	}
@@ -494,6 +513,18 @@ func (r *Runtime) resolveFileURLs(ctx context.Context, cfg *Config, fileURL, fil
 		requests = append(requests, map[string]interface{}{
 			"url":          fileURL,
 			"download":     false,
+			"downloadName": fileName,
+			"permissionRecord": map[string]interface{}{
+				"table": "thread", "id": pointer["id"], "spaceId": pointer["spaceId"],
+			},
+		})
+	}
+	// Вариант с useS3Url — именно так веб-клиент скачивает файл целиком.
+	for _, pointer := range pointers {
+		requests = append(requests, map[string]interface{}{
+			"url":          fileURL,
+			"download":     true,
+			"useS3Url":     true,
 			"downloadName": fileName,
 			"permissionRecord": map[string]interface{}{
 				"table": "thread", "id": pointer["id"], "spaceId": pointer["spaceId"],
@@ -513,12 +544,23 @@ func (r *Runtime) resolveFileURLs(ctx context.Context, cfg *Config, fileURL, fil
 		if err != nil {
 			continue
 		}
-		add(firstSignedURL(signed))
+		link := firstSignedURL(signed)
+		add(link)
+		add(artifactProxyURL(link))
 	}
 	if len(links) == 0 {
 		return nil, fmt.Errorf("Notion не выдал ссылку на файл %s", fileName)
 	}
 	return links, nil
+}
+
+// artifactProxyURL — тот самый прокси из HAR: браузер тянет файлы агента
+// через artifact.notionusercontent.com/?src=<закодированная ссылка>.
+func artifactProxyURL(link string) string {
+	if !strings.HasPrefix(link, "http") || strings.Contains(link, "artifact.notionusercontent.com") {
+		return ""
+	}
+	return "https://artifact.notionusercontent.com/?src=" + neturl.QueryEscape(link)
 }
 
 // firstSignedURL достаёт первую http-ссылку из ответа getSignedFileUrls.
