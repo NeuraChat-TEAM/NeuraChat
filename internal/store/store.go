@@ -1,0 +1,377 @@
+package store
+
+import (
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"path/filepath"
+	"time"
+
+	_ "modernc.org/sqlite" // pure-Go driver, no cgo toolchain required
+
+	"neura/internal/uid"
+)
+
+// Thread is a chat in the sidebar. SpaceID привязывает чат к воркспейсу:
+// каждый воркспейс показывает только свою историю.
+type Thread struct {
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	SpaceID   string `json:"spaceId"`
+	CreatedAt int64  `json:"createdAt"`
+	UpdatedAt int64  `json:"updatedAt"`
+}
+
+// Message is one persisted chat turn. Parts holds the rendered timeline
+// (text / reasoning / tool cards) as JSON so reloads look identical.
+type Message struct {
+	ID        string `json:"id"`
+	ThreadID  string `json:"threadId"`
+	Role      string `json:"role"`
+	Content   string `json:"content"`
+	Parts     string `json:"parts"`
+	CreatedAt int64  `json:"createdAt"`
+}
+
+type Store struct{ db *sql.DB }
+
+func Open(dir string) (*Store, error) {
+	// WAL + NORMAL sync keeps streaming writes cheap without risking the file.
+	dsn := "file:" + filepath.Join(dir, "neura.db") +
+		"?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)"
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1) // SQLite writes are serialized anyway
+
+	schema := `
+CREATE TABLE IF NOT EXISTS threads (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS messages (
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  role TEXT NOT NULL,
+  content TEXT NOT NULL DEFAULT '',
+  parts TEXT NOT NULL DEFAULT '[]',
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS messages_thread_idx ON messages(thread_id, created_at);
+CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+`
+	if _, err := db.Exec(schema); err != nil {
+		return nil, err
+	}
+	// Миграция для баз, созданных до разделения чатов по воркспейсам.
+	// Ошибку игнорируем: колонка уже может существовать.
+	_, _ = db.Exec(`ALTER TABLE threads ADD COLUMN space_id TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`CREATE INDEX IF NOT EXISTS threads_space_idx ON threads(space_id, updated_at)`)
+	return &Store{db: db}, nil
+}
+
+func (s *Store) Close() error { return s.db.Close() }
+
+func now() int64 { return time.Now().UnixMilli() }
+
+func (s *Store) CreateThread(title, spaceID string) (Thread, error) {
+	thread := Thread{ID: uid.New(), Title: title, SpaceID: spaceID, CreatedAt: now(), UpdatedAt: now()}
+	_, err := s.db.Exec(`INSERT INTO threads (id,title,space_id,created_at,updated_at) VALUES (?,?,?,?,?)`,
+		thread.ID, thread.Title, thread.SpaceID, thread.CreatedAt, thread.UpdatedAt)
+	return thread, err
+}
+
+// UpsertThreads сливает список из Notion с локальной базой. Локальные чаты не
+// удаляются: новый чат может ещё не успеть появиться в удалённом списке.
+func (s *Store) UpsertThreads(threads []Thread) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stmt, err := tx.Prepare(`
+INSERT INTO threads (id,title,space_id,created_at,updated_at) VALUES (?,?,?,?,?)
+ON CONFLICT(id) DO UPDATE SET
+  title=excluded.title,
+  space_id=excluded.space_id,
+  created_at=CASE WHEN threads.created_at=0 THEN excluded.created_at ELSE MIN(threads.created_at, excluded.created_at) END,
+  updated_at=MAX(threads.updated_at, excluded.updated_at)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, thread := range threads {
+		if thread.ID == "" {
+			continue
+		}
+		if _, err := stmt.Exec(thread.ID, thread.Title, thread.SpaceID, thread.CreatedAt, thread.UpdatedAt); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// ListThreads отдаёт чаты активного воркспейса. Чаты без привязки (созданные
+// до миграции) показываем везде, чтобы старая история не пропала.
+func (s *Store) ListThreads(spaceID string) ([]Thread, error) {
+	rows, err := s.db.Query(`
+SELECT id,title,space_id,created_at,updated_at FROM threads
+WHERE ?1 = '' OR space_id = ?1 OR space_id = ''
+ORDER BY updated_at DESC`, spaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []Thread{}
+	for rows.Next() {
+		var thread Thread
+		if err := rows.Scan(&thread.ID, &thread.Title, &thread.SpaceID, &thread.CreatedAt, &thread.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, thread)
+	}
+	return out, rows.Err()
+}
+
+// AdoptThread закрепляет чат за воркспейсом, если он ещё ничей.
+func (s *Store) AdoptThread(id, spaceID string) error {
+	if id == "" || spaceID == "" {
+		return nil
+	}
+	_, err := s.db.Exec(`UPDATE threads SET space_id=? WHERE id=? AND space_id=''`, spaceID, id)
+	return err
+}
+
+// SearchThreads ищет по названиям и по тексту сообщений внутри воркспейса.
+func (s *Store) SearchThreads(spaceID, query string, limit int) ([]Thread, error) {
+	if limit <= 0 {
+		limit = 30
+	}
+	like := "%" + query + "%"
+	rows, err := s.db.Query(`
+SELECT DISTINCT t.id, t.title, t.space_id, t.created_at, t.updated_at
+FROM threads t LEFT JOIN messages m ON m.thread_id = t.id
+WHERE (?1 = '' OR t.space_id = ?1 OR t.space_id = '')
+  AND (t.title LIKE ?2 OR m.content LIKE ?2)
+ORDER BY t.updated_at DESC LIMIT ?3`, spaceID, like, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []Thread{}
+	for rows.Next() {
+		var thread Thread
+		if err := rows.Scan(&thread.ID, &thread.Title, &thread.SpaceID, &thread.CreatedAt, &thread.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, thread)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) RenameThread(id, title string) error {
+	if id == "" {
+		return errors.New("не указан чат")
+	}
+	_, err := s.db.Exec(`UPDATE threads SET title=?, updated_at=? WHERE id=?`, title, now(), id)
+	return err
+}
+
+func (s *Store) TouchThread(id string) error {
+	_, err := s.db.Exec(`UPDATE threads SET updated_at=? WHERE id=?`, now(), id)
+	return err
+}
+
+func (s *Store) DeleteThread(id string) error {
+	_, err := s.db.Exec(`DELETE FROM threads WHERE id=?`, id)
+	return err
+}
+
+func (s *Store) SaveMessage(message Message) error {
+	if message.ID == "" {
+		message.ID = uid.New()
+	}
+	if message.CreatedAt == 0 {
+		message.CreatedAt = now()
+	}
+	if message.Parts == "" {
+		message.Parts = "[]"
+	}
+	if !json.Valid([]byte(message.Parts)) {
+		message.Parts = "[]"
+	}
+	if _, err := s.db.Exec(`
+INSERT INTO messages (id,thread_id,role,content,parts,created_at) VALUES (?,?,?,?,?,?)
+ON CONFLICT(id) DO UPDATE SET content=excluded.content, parts=excluded.parts`,
+		message.ID, message.ThreadID, message.Role, message.Content, message.Parts, message.CreatedAt); err != nil {
+		return err
+	}
+	return s.TouchThread(message.ThreadID)
+}
+
+// EnsureThread создаёт строку чата, если его ещё нет локально: чат может
+// прийти из Notion (веб-версия, другое устройство) раньше, чем его сообщения.
+func (s *Store) EnsureThread(id, title, spaceID string) error {
+	if id == "" {
+		return errors.New("не указан чат")
+	}
+	_, err := s.db.Exec(
+		`INSERT INTO threads (id,title,space_id,created_at,updated_at) VALUES (?,?,?,?,?)
+ON CONFLICT(id) DO NOTHING`,
+		id, title, spaceID, now(), now(),
+	)
+	return err
+}
+
+// ReplaceMessages перезаписывает историю чата целиком. Нужно для сверки с
+// Notion: там транскрипт — источник правды, а дозапись плодила бы дубли
+// одного и того же ответа под разными id.
+func (s *Store) ReplaceMessages(threadID string, messages []Message) error {
+	if threadID == "" {
+		return errors.New("не указан чат")
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM messages WHERE thread_id=?`, threadID); err != nil {
+		return err
+	}
+	stmt, err := tx.Prepare(
+		`INSERT INTO messages (id,thread_id,role,content,parts,created_at) VALUES (?,?,?,?,?,?)
+ON CONFLICT(id) DO UPDATE SET content=excluded.content, parts=excluded.parts, created_at=excluded.created_at`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, message := range messages {
+		if message.ID == "" {
+			message.ID = uid.New()
+		}
+		if message.Parts == "" || !json.Valid([]byte(message.Parts)) {
+			message.Parts = "[]"
+		}
+		if message.CreatedAt == 0 {
+			message.CreatedAt = now()
+		}
+		if _, err := stmt.Exec(
+			message.ID, threadID, message.Role, message.Content, message.Parts, message.CreatedAt,
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) LoadMessages(threadID string) ([]Message, error) {
+	rows, err := s.db.Query(`SELECT id,thread_id,role,content,parts,created_at FROM messages WHERE thread_id=? ORDER BY created_at`, threadID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []Message{}
+	for rows.Next() {
+		var message Message
+		if err := rows.Scan(&message.ID, &message.ThreadID, &message.Role, &message.Content, &message.Parts, &message.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, message)
+	}
+	return out, rows.Err()
+}
+
+// DeleteMessagesFrom drops a message and everything after it (used on edit).
+func (s *Store) DeleteMessagesFrom(threadID, messageID string) error {
+	_, err := s.db.Exec(`
+DELETE FROM messages WHERE thread_id=? AND created_at >= (
+  SELECT created_at FROM messages WHERE id=?
+)`, threadID, messageID)
+	return err
+}
+
+func (s *Store) SetKV(key, value string) error {
+	_, err := s.db.Exec(`INSERT INTO kv (k,v) VALUES (?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, key, value)
+	return err
+}
+
+func (s *Store) GetKV(key string) (string, error) {
+	var value string
+	err := s.db.QueryRow(`SELECT v FROM kv WHERE k=?`, key).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return value, err
+}
+
+func threadPreferenceKey(kind, mode, spaceID, threadID string) string {
+	return "thread-pref:" + kind + ":" + mode + ":" + spaceID + ":" + threadID
+}
+
+func (s *Store) SetThreadHidden(spaceID, mode, threadID string, hidden bool) error {
+	value := "0"
+	if hidden {
+		value = "1"
+	}
+	return s.SetKV(threadPreferenceKey("hidden", mode, spaceID, threadID), value)
+}
+
+func (s *Store) ThreadHidden(spaceID, mode, threadID string) (bool, error) {
+	value, err := s.GetKV(threadPreferenceKey("hidden", mode, spaceID, threadID))
+	return value == "1", err
+}
+
+func (s *Store) SetThreadTitleOverride(spaceID, mode, threadID, title string) error {
+	return s.SetKV(threadPreferenceKey("title", mode, spaceID, threadID), title)
+}
+
+func (s *Store) ThreadTitleOverride(spaceID, mode, threadID string) (string, error) {
+	return s.GetKV(threadPreferenceKey("title", mode, spaceID, threadID))
+}
+
+// ConversationForRemoteThread resolves a Notion thread id back to the local
+// conversation id used by the UI. Without this merge the remote sync inserted
+// a second, empty sidebar row and opening it looked like the history vanished.
+func (s *Store) ConversationForRemoteThread(spaceID, remoteThreadID, mode string) (string, error) {
+	lookup := func(prefix string) (string, error) {
+		var conversationID string
+		err := s.db.QueryRow(
+			`SELECT substr(k, ?) FROM kv WHERE k LIKE ? AND v=? LIMIT 1`,
+			len(prefix)+1, prefix+"%", remoteThreadID,
+		).Scan(&conversationID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return conversationID, err
+	}
+	conversationID, err := lookup("thread:" + mode + ":" + spaceID + ":")
+	if err != nil || conversationID != "" {
+		return conversationID, err
+	}
+	// Compatibility with mappings written before explicit V2/V3 names.
+	switch mode {
+	case "v2":
+		return lookup("thread:legacy:" + spaceID + ":")
+	case "v3":
+		return lookup("thread:agent:" + spaceID + ":")
+	case "legacy":
+		return lookup("thread:" + spaceID + ":")
+	default:
+		return "", nil
+	}
+}
+
+// DeleteThreadIfEmpty removes a duplicate remote-only sidebar row while never
+// touching a thread that already has locally persisted messages.
+func (s *Store) DeleteThreadIfEmpty(id string) error {
+	_, err := s.db.Exec(`DELETE FROM threads WHERE id=? AND NOT EXISTS (
+		SELECT 1 FROM messages WHERE thread_id=threads.id
+	)`, id)
+	return err
+}

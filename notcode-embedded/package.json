@@ -1,0 +1,30 @@
+{
+  "name": "notcode",
+  "version": "2.0.0",
+  "description": "Локальный MCP-сервер инструментов для Neura",
+  "license": "MIT",
+  "module": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "bun": ">=1.1.0"
+  },
+  "scripts": {
+    "dev": "bun --watch src/index.ts start",
+    "start": "bun run src/index.ts start",
+    "status": "bun run src/index.ts status",
+    "token": "bun run src/index.ts token",
+    "audit": "bun run src/index.ts audit",
+    "typecheck": "bunx tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "elysia": "^1.4.29",
+    "pdfjs-dist": "4.10.38",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "bun-types": "latest",
+    "typescript": "^5.9.3"
+  }
+}

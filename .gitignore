@@ -1,0 +1,52 @@
+# Dependencies
+node_modules/
+.bun/
+
+# Generated frontend output and bindings
+frontend/dist/
+frontend/wailsjs/
+*.tsbuildinfo
+
+# Build artifacts
+# Всю папку build/ генерит wails: и bin, и windows-ассеты.
+build/
+dist/
+out/
+*.exe
+!internal/ngrokbin/ngrok.exe
+*.msix
+*.msixbundle
+*.appx
+*.appxbundle
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local runtime data
+.notcode/
+.notcode-smoke/
+audit.jsonl
+snapshots/
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs and coverage
+*.log
+logs/
+coverage/
+npm-debug.log*
+bun-debug.log*
+
+# IDE and OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
